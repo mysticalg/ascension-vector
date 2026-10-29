@@ -71,7 +71,10 @@ const MIN_SHOT     = .1;             // shortest allowed shot in seconds (a 1/4-
 const SAFE_MIN_SHOT= .6;             // SAFE_MODE minimum shot length (no stutters, no flashes)
 const EDIT_SEED    = 963;            // change for a different (but still deterministic) edit
 const MOTION       = 1;              // global camera speed multiplier (fly-throughs, orbits, push-ins)
-const SNAP_ZOOM    = .5;             // downbeat snap-zoom strength (off in SAFE_MODE)
+const SNAP_ZOOM    = .5;
+const ZOOM_AMOUNT  = 1;              // continuous push-ins, dolly zooms on builds, crash/zoom-through transitions (0 = off)
+const ZOOM_PUNCH   = 1;              // beat/snare zoom-punch strength (downbeats strongest; off in SAFE_MODE)
+const GEN_SHARE    = .82;            // hero scenes are capped at ~20% of shots            // share of the edit given to procedurally generated scenes             // downbeat snap-zoom strength (off in SAFE_MODE)
 const BEAT_PULSE   = .16;            // exposure pulse on beats (SAFE_MODE: .04). Partial brightness only
 const SECTION_FLASH= .8;             // exposure boost at drops / section change (rate-limited ≤3/s, never red; off in SAFE_MODE)
 const BLOOM_STRENGTH=.55, CHROMA=.012, GRAIN=.045, EXPOSURE=.75, FADE_OUT_SECONDS=10;
@@ -424,6 +427,118 @@ void main(){
  O=vec4(clamp(col,0.,24.),DEP/(DEP+8.));      // depth in alpha for the DoF pass
 }`;
 
+const FS_GEN=HEAD+`
+// ===== procedural scene generator: seeded per shot. G0=(prim,fold,deform,bg) G1=(rep,twist,kscale,koff) G2=(mat,rig,sym,glow) G3=(rotA,rotB,iters,size)
+uniform vec4 G0,G1,G2,G3,G4; uniform vec3 PA,PB,PC,PD; out vec4 O;
+vec3 pal(float t){return PA+PB*cos(6.2832*(PC*t+PD));}
+// ---- 2D / 2.5D effect families (G4.y>0): plasma, moire, rotozoom, voxel landscape, metaballs, raster bars, starfield, julia, reaction-diffusion-style
+float h21(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+vec3 fx2d(int e,vec2 uv,float s){vec3 c=vec3(0);
+ if(e==1){float v=sin(uv.x*6.+s)+sin(uv.y*7.-s*1.3)+sin((uv.x+uv.y)*5.+s*.7)+sin(length(uv*8.)-s*2.);c=pal(v*.18+s*.05)*(.35+.4*sin(v*2.)*sin(v*2.));}
+ else if(e==2){float z=exp(-fract(s*.1)*1.5);vec2 a=uv-vec2(.3*sin(s*.4),.2*cos(s*.5)),b=uv+vec2(.3*sin(s*.3),.2*cos(s*.45));float m=sin(length(a)*90.*z)*sin(length(b)*90.*z);c=pal(.2+.1*m)*smoothstep(0.,.3,m)*.9;}
+ else if(e==3){float z=exp(fract(s*.12)*2.3);vec2 q=uv*rot(s*.4)*(4./z);vec2 g=floor(q);float ch=mod(g.x+g.y,2.);vec2 f=fract(q)-.5;   // rotozoom: endless zoom into a tiled pattern
+  float ring=smoothstep(.05,0.,abs(length(f)-.3));c=pal(h21(mod(g,8.))*.5+s*.03)*(.15+.6*ch)+pal(.7)*ring*.6;}
+ else if(e==4){vec3 col=vec3(0);float t=0.;vec3 ro=vec3(s*.8,1.2,s*1.6),rd=normalize(vec3(uv.x,uv.y-.35,1.));   // voxel landscape (heightfield march)
+  for(int i=0;i<64;i++){vec3 p=ro+rd*t;vec2 cl=floor(p.xz*2.)/2.;float h=.6*sin(cl.x*.7)*cos(cl.y*.5)+.4*sin(cl.x*.3+cl.y*.4+s*.2);if(p.y<h){col=pal(h*.5+.4)*(.4+.6*fract(p.y*2.))*exp(-t*.08);break;}t+=.08+t*.02;}
+  c=col+pal(.6)*.06*max(0.,rd.y+.2);}
+ else if(e==5){float v=0.;for(int i=0;i<6;i++){float fi=float(i);vec2 p=.6*vec2(sin(s*.5+fi*1.7),cos(s*.37+fi*2.3));v+=.025/dot(uv-p,uv-p);}c=pal(v*.08)*smoothstep(.9,1.2,v)*(.4+.3*sin(v*3.));}
+ else if(e==6){for(int i=0;i<8;i++){float fi=float(i),y=.45*sin(s*1.3+fi*.55);float w=.06;c+=pal(fi*.12)*smoothstep(w,0.,abs(uv.y-y))*.9;}c+=pal(.5)*.04*step(.5,fract(uv.x*20.+s));}
+ else if(e==7){for(int l=0;l<3;l++){float z=fract(s*.3+float(l)*.33);vec2 q=uv/(1.05-z)*4.;vec2 g=floor(q);float hh=h21(g+float(l)*9.);vec2 f=fract(q)-.5-vec2(hh-.5,fract(hh*7.)-.5)*.6;c+=pal(hh)*smoothstep(.07*z+.015,0.,length(f))*z*2.5*step(.45,hh);}c+=pal(.6)*.03;}
+ else if(e==8){float zm=exp(-fract(s*.05)*4.);vec2 z=uv*1.4*zm+vec2(-.745,.113)*(1.-zm);vec2 k=vec2(-.8+.08*sin(s*.3),.156);float n=0.;   // Julia set, deep-zooming
+  for(int i=0;i<90;i++){z=vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y)+k;if(dot(z,z)>16.)break;n++;}c=n>89.?vec3(0):pal(n*.03+s*.02)*sqrt(n/90.)*1.2;}
+ else {vec2 q=uv*6.;for(int i=0;i<4;i++){q+=.6*vec2(sin(q.y*1.7+s*.3),cos(q.x*1.5-s*.2));}float v=sin(q.x*3.)*sin(q.y*3.);c=pal(.3+.2*v)*smoothstep(-.1,.3,v)*.8;}   // reaction-diffusion-like labyrinth
+ return c;}
+// ---- render styles + palette modes applied on top of any scene
+vec3 styleIt(int st,vec3 col,vec2 fc,float edge,float xr){float l=dot(col,vec3(.299,.587,.114));
+ if(st==1)return col*.15+pal(.6)*edge*1.4;                                                     // wireframe / edge-detect
+ if(st==2){vec2 g=floor(fc/3.);return col*step(.82,h21(g))*2.2;}                              // point cloud
+ if(st==3){vec2 c=floor(fc/6.),f=mod(fc,6.);float b=floor(clamp(l*2.5,0.,1.)*7.)/7.;float glyph=step(h21(c+floor(b*7.)),.5+.4*b)*step(1.,f.x)*step(1.,f.y)*step(.05,b);return pal(.3+b*.4)*glyph*(.4+b*1.4);}  // ASCII-ish glyph cells
+ if(st==4)return pal(.55)*xr*1.6+col*.12;                                                      // x-ray / translucent
+ if(st==5){vec3 q=floor(col*4./max(l*1.2,.25)+.5)/4.*max(l*1.2,.25);return q*(1.-edge*.9);}     // toon / posterised with ink lines
+ if(st==6){vec2 c=mod(fc,7.)-3.5;float r=sqrt(clamp(l*1.4,0.,1.))*3.6;return pal(.15)*.04+col/max(l,.05)*.55*smoothstep(r,r-1.,length(c));}   // halftone
+ if(st==7){float x=clamp(l*1.6,0.,1.);return vec3(smoothstep(.2,.6,x),smoothstep(.45,.9,x),smoothstep(-.1,.3,x)*(1.-smoothstep(.3,.6,x))+smoothstep(.85,1.,x))*.9;}  // thermal
+ if(st==8){float row=floor(fc.y/3.);float k=step(.7,h21(vec2(row,floor(T*8.))));return mix(col,vec3(l)*pal(row*.01)*1.5,k*.6)*(1.+k*.3);}  // glitch pixel-sort rows
+ return col;}
+vec3 palMode(int m,vec3 c){float l=dot(c,vec3(.299,.587,.114));
+ if(m==1)return vec3(l)*1.1;                                                   // monochrome
+ if(m==2)return mix(pal(.05)*.3,pal(.55)*1.2,smoothstep(0.,.6,l))*smoothstep(0.,.1,l)*1.4*l/max(l,.12);  // duotone
+ if(m==3)return c*c*3.+c*.35;                                                        // neon on black (crushed blacks)
+ if(m==4)return mix(c,vec3(.55,.5,.6)*l*2.,.45)+.015;                          // pastel
+ if(m==5)return vec3(1.,.72,.25)*pow(l,1.4)*1.6;                                 // gold / black
+ if(m==6)return vec3(l*1.5,l*.35,l*.55+.1*c.g)*vec3(1.2,1.,1.);                   // infrared
+ if(m==7){float mx=max(c.r,max(c.g,c.b))+1e-4;return (vec3(1)-c/mx)*l*1.8+vec3(l)*.2;}   // inverted (chroma negative, luminance kept so it never washes out)
+ return c;}
+
+float box(vec3 p,vec3 b){vec3 q=abs(p)-b;return length(max(q,0.))+min(max(q.x,max(q.y,q.z)),0.);}
+float seg(vec3 p,vec3 a,vec3 b){vec3 pa=p-a,ba=b-a;return length(pa-ba*clamp(dot(pa,ba)/dot(ba,ba),0.,1.));}
+float prim(vec3 p,float k){int i=int(G0.x);
+ if(i==0)return length(p)-.5*k;
+ if(i==1)return box(p,vec3(.4*k))-.03;
+ if(i==2){vec2 q=vec2(length(p.xz)-.45*k,p.y);return length(q)-.09*k;}
+ if(i==3){p=abs(p);return (p.x+p.y+p.z-.6*k)*.577;}
+ if(i==4){p=abs(p);return min(length(p.xy),min(length(p.yz),length(p.xz)))-.07*k;}
+ if(i==5){float b=box(p,vec3(.45*k));vec3 r=abs(p);return max(b,-(min(max(r.x,r.y),min(max(r.y,r.z),max(r.x,r.z)))-.32*k));}
+ return max(length(p.xz)-.28*k,abs(p.y)-.6*k);}
+float TRAP;
+float star5(vec2 p,float r){const vec2 k1=vec2(.809017,-.587785),k2=vec2(-k1.x,k1.y);p.x=abs(p.x);p-=2.*max(dot(k1,p),0.)*k1;p-=2.*max(dot(k2,p),0.)*k2;p.x=abs(p.x);p.y-=r;
+ vec2 ba=.38197*vec2(-k1.y,k1.x)-vec2(0,1);float h=clamp(dot(p,ba)/dot(ba,ba),0.,r);return length(p-ba*h)*sign(p.y*ba.x-p.x*ba.y);}
+float symG(vec3 p){int s=int(G2.z);if(s==0)return 1e5;
+ if(s==1){float z=mod(p.z+2.,4.)-2.;vec2 q=p.xy*rot(T*.2);float d=abs(star5(q,1.6))-.025;d=min(d,abs(length(q)-1.75)-.02);return max(d,abs(z)-.04);}   // pentagram gates
+ float z=mod(p.z+2.,4.)-2.;vec2 q=p.xy*rot(-T*.15);float a=atan(q.y,q.x),r=length(q),sct=1.0472;a=mod(a+sct*.5,sct)-sct*.5;a=abs(a);q=vec2(cos(a),sin(a))*r;   // Metatron's cube gates: 13 circles + their connecting lines, 6-fold
+ float R1=.62,cr=.3;vec2 c0=vec2(0),n1=vec2(R1,0),n2=vec2(2.*R1,0),m1=R1*vec2(.5,.866),m2=2.*R1*vec2(.5,.866),k1=R1*vec2(.5,-.866),k2=2.*R1*vec2(.5,-.866);
+ float d=min(abs(length(q)-cr),min(abs(length(q-n1)-cr),abs(length(q-n2)-cr)));
+ vec3 C0=vec3(c0,0),N1=vec3(n1,0),N2=vec3(n2,0),M1=vec3(m1,0),M2=vec3(m2,0),K1=vec3(k1,0),K2=vec3(k2,0),Q=vec3(q,0);
+ d=min(d,min(min(seg(Q,C0,N2),seg(Q,N2,M2)),min(seg(Q,N2,K2),min(seg(Q,N1,M2),min(seg(Q,N2,M1),min(seg(Q,M2,K2),seg(Q,N1,M1)))))));
+ d=min(d,min(seg(Q,N2,vec3(-k1,0)),seg(Q,M2,vec3(-m1*0.-k2*0.+vec2(-R1,0),0))));
+ return max(d-.018,abs(z)-.04);}
+float map(vec3 p){int f=int(G0.y);float sc=1.,rep=G1.x;TRAP=1e5;vec3 q=p;
+ if(f==4)q.xy*=rot(q.z*G1.y);
+ if(f==5)q.xy*=rot(q.x*G1.y*.3);
+ if(f==1){float a=atan(q.y,q.x),r=length(q.xy),n=G1.z,sct=6.2832/n;a=mod(a+sct*.5,sct)-sct*.5;a=abs(a);q.xy=vec2(cos(a),sin(a))*r;q.x-=G1.w;q.z=mod(q.z+rep*.5,rep)-rep*.5;}
+ else if(f==2){for(int i=0;i<5;i++){if(float(i)>=G3.z)break;q=abs(q);q.xy*=rot(G3.x);q.yz*=rot(G3.y);if(q.x<q.y)q.xy=q.yx;if(q.x<q.z)q.xz=q.zx;
+   q=q*G1.z-vec3(G1.w)*(G1.z-1.);sc*=G1.z;TRAP=min(TRAP,length(q));}}
+ else if(f==3){vec3 c=q;float dr=1.;for(int i=0;i<5;i++){q=clamp(q,-1.,1.)*2.-q;float r2=dot(q,q);if(r2<.25){q*=4.;dr*=4.;}else if(r2<1.){q/=r2;dr/=r2;}
+   q=q*G1.z+c;dr=dr*abs(G1.z)+1.;TRAP=min(TRAP,r2);}sc=dr;}
+ else q=mod(q+rep*.5,rep)-rep*.5;
+ float k=G3.w*(1.+.15*KICK);float d=prim(q,k)/sc;
+ int df=int(G0.z);if(df==1)d+=.04*sin(p.x*6.+T)*sin(p.y*6.)*sin(p.z*6.-T);else if(df==2)d=abs(d)-.02;
+ if(TRAP>1e4)TRAP=length(q);
+ return min(d,symG(p));}
+vec3 nrm(vec3 p,float e){vec2 h=vec2(e,-e);return normalize(h.xyy*map(p+h.xyy)+h.yyx*map(p+h.yyx)+h.yxy*map(p+h.yxy)+h.xxx*map(p+h.xxx));}
+vec3 bgc(vec3 rd){int b=int(G0.w);vec3 c=pal(.6+rd.y*.3)*.04;
+ if(b==1)c=mix(pal(.1)*.012,pal(.4)*.09,smoothstep(-.4,.8,rd.y));
+ else if(b==2)c=pal(.3+.1*rd.x)*.03;
+ else if(b==3){vec3 s=floor(rd*180.);c+=step(.995,fract(sin(dot(s,vec3(12.9,78.2,37.7)))*43758.5))*vec3(1.4);}
+ return c;}
+void gcam(out vec3 ro,out vec3 ta,out float roll){int r=int(G2.y);float s=ST;roll=0.;
+ float hc=G1.x*.5,ds=G0.y==3.?3.2:G0.y==2.?1.3:1.;
+ if(r==0){ro=vec3(hc+sin(s*.3)*.25*hc,hc+cos(s*.23)*.2*hc,s*2.6);if(int(G0.y)==1)ro.xy-=hc;ta=ro+vec3(sin(s*.2)*.3,0,1);roll=s*.05;}                 // fly-through
+ else if(r==1){float a=s*.45;ro=vec3(sin(a),.35*sin(s*.3),cos(a))*(3.4-.6*sin(s*.2))*ds;ta=vec3(0);}              // rapid orbit
+ else if(r==2){float z=3.6*exp(-fract(s*.06)*2.)+.5;float a=s*.3;ro=vec3(sin(a),.4,cos(a))*z*ds;ta=vec3(0);roll=s*.1;}  // fractal deep zoom (exponential dive)
+ else {ro=vec3(s*1.8,hc+.2*hc*sin(s*.4),hc+.3*hc*sin(s*.2));ta=ro+vec3(.6,0,1);roll=.2*sin(s*.3);}                   // strafe
+ if(CM==0){vec3 v=ro-ta;v.xz=rot(CV.x)*v.xz;float l=length(v);float el=clamp(asin(clamp(v.y/l,-1.,1.))+CV.y,-1.4,1.4);vec2 hz=normalize(v.xz+1e-5);v=vec3(hz.x*cos(el),sin(el),hz.y*cos(el))*l*CV.z;ro=ta+v;}
+ else{vec3 f=ta-ro;f.xz=rot(CV.x*.4)*f.xz;ro+=normalize(f)*(CV.z-1.)*1.5;ta=ro+f;}
+ roll+=CV.w;}
+void main(){vec2 uv=(gl_FragCoord.xy-OFS+JIT-.5*R)/R.y;int ST_=int(G4.x),PM=int(G4.z);
+ if(G4.y>0.){vec3 c=fx2d(int(G4.y),uv*rot(CV.w)/(FL()*.62),ST*.5);float lc=dot(c,vec3(.33));c=palMode(PM,styleIt(ST_,c,gl_FragCoord.xy,smoothstep(.02,.0,abs(fract(lc*6.)-.5)-.45),lc));O=vec4(clamp(c,0.,6.),1);return;}
+ vec3 ro,ta;float roll;gcam(ro,ta,roll);
+ vec3 f=normalize(ta-ro),up=vec3(sin(roll),cos(roll),0.),r=normalize(cross(up,f)),u=cross(f,r);vec3 rd=normalize(f*FL()+uv.x*r+uv.y*u);
+ float t=.02,d=0.,gl=0.,mind=1e5,xr=0.;int k;bool hit=false;
+ for(k=0;k<GSTEPS;k++){vec3 p=ro+rd*t;d=map(p);gl+=exp(-abs(d)*24.)*.012;xr+=exp(-abs(d)*8.)*.02;if(t>.3&&d>mind+.002&&mind<.02*t)mind=-1.;else if(mind>=0.)mind=min(mind,d);if(abs(d)<.0012*t){hit=true;break;}t+=d*.8;if(t>40.)break;}
+ vec3 bg=bgc(rd),col=bg;int m=int(G2.x);
+ if(hit){vec3 p=ro+rd*t,n=nrm(p,.0015*t),L=normalize(vec3(.6,.8,-.4));float dif=max(dot(n,L),0.),ao=1.-float(k)/float(GSTEPS);
+  float fr=pow(1.-max(dot(n,-rd),0.),3.);vec3 base=pal(TRAP*.35+p.z*.03+G1.w*.1);
+  if(m==0)col=base*(.12+.9*dif)*ao+fr*pal(.7)*.3;
+  else if(m==1){vec3 rf=reflect(rd,n);col=(bgc(rf)*6.+pal(rf.y*.5+.5)*.25)*(.3+.7*ao)+base*dif*.15+pow(max(dot(rf,L),0.),40.)*.8;}
+  else if(m==2)col=base*(.1+.35*dif)*ao+pal(TRAP*.5)*smoothstep(.3,1.,fr)*1.6*(1.+KICK)+pal(TRAP*.5+.3)*.5*smoothstep(.85,1.,sin(TRAP*18.+T*3.)*.5+.5);
+  else col=base*.05+pal(fr+TRAP*.2)*fr*1.2*ao+dif*.08;
+  col=mix(col,bg,1.-exp(-t*(G0.w==2.?.09:.05)));}
+ col+=pal(.55+.2*sin(T*.3))*gl*G2.w*(.6+.8*KICK);
+ float edge=mind<0.?1.:hit?smoothstep(.4,1.,float(k)/float(GSTEPS))+(1.-smoothstep(0.,.3,abs(dot(nrm(ro+rd*t,.002*t),rd)))):0.;   // silhouettes & creases
+ col=palMode(PM,styleIt(ST_,col,gl_FragCoord.xy,clamp(edge,0.,1.),xr));
+ if(any(isnan(col))||any(isinf(col)))col=vec3(0);
+ O=vec4(clamp(col,0.,6.),hit?t/(t+8.):1.);}`;
+
 // GPU particle galaxy: positions computed from gl_VertexID (no buffers)
 const VS_PART=HEAD+`
 uniform float PSCALE; out vec3 vc;
@@ -477,7 +592,7 @@ void main(){vec2 uv=gl_FragCoord.xy/RES;vec4 c0=texture(S,uv);
  O=vec4(acc/w,c0.a);}`;
 // feedback: trails = max(current, decayed+zoomed previous); TA>0 = temporal accumulation (anti-grain for the fractal)
 const FS_FEED=`#version 300 es
-precision highp float;uniform sampler2D S,P;uniform vec2 RES;uniform float DECAY,ZOOM,ROT,TA,GL,RB,SPL,TM;uniform vec2 BV;uniform int KAL;out vec4 O;
+precision highp float;uniform sampler2D S,P;uniform vec2 RES;uniform float DECAY,ZOOM,ROT,TA,GL,RB,SPL,TM,DR,DRP;uniform vec2 BV;uniform int KAL;out vec4 O;
 float hh(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 vec2 kal(vec2 uv){vec2 q=uv-.5;
  if(KAL==1)q.x=abs(q.x);                                   // mirror split
@@ -485,15 +600,19 @@ vec2 kal(vec2 uv){vec2 q=uv-.5;
  else if(KAL==3){q.x*=RES.x/RES.y;float a=atan(q.y,q.x),r=length(q),n=6.;a=mod(a,6.2831/n);a=abs(a-3.1416/n);q=vec2(cos(a),sin(a))*r;q.x/=RES.x/RES.y;}
  return q+.5;}
 void main(){vec2 uv=gl_FragCoord.xy/RES;vec2 c=uv-.5;c*=1.-ZOOM;c=mat2(cos(ROT),-sin(ROT),sin(ROT),cos(ROT))*c;
- vec2 su=KAL>0?kal(uv):uv;
+ vec2 su=KAL>0?kal(uv):uv;float dframe=0.;
+ if(DR>0.){vec2 q=su-.5;float m=max(abs(q.x),abs(q.y))*2.,lk=-log(DR);float lv=-log(max(m,1e-4))/lk+DRP;float n=floor(lv);   // Droste: the frame recurses inside itself, endlessly zooming
+  q=(su-.5)*pow(DR,DRP-n);su=q+.5;float mm=max(abs(q.x),abs(q.y))*2.;dframe=smoothstep(.985,1.,mm)*step(mm,1.01);}
  if(GL>0.){vec2 bk=floor(uv*vec2(24.,14.));float g=hh(bk+floor(TM*24.));if(g<GL*.8)su+=vec2(hh(bk+3.)-.5,0)*.12*GL;}
  vec3 cur=vec3(0);vec2 dv=BV+(su-.5)*RB;                    // directional (whip) + radial (push-in) motion blur
- for(int i=0;i<6;i++)cur+=texture(S,su-dv*(float(i)/5.-.5)).rgb;cur/=6.;
+ for(int i=0;i<10;i++)cur+=texture(S,su-dv*(float(i)/9.-.5)).rgb;cur/=10.;   // radial zoom-blur: an average, so it cannot raise exposure
+ cur*=1.-.85*dframe;
  vec3 pr=texture(P,c+.5).rgb;
  if(GL>0.){vec2 bk=floor(uv*vec2(16.,9.));if(hh(bk+floor(TM*12.)+7.)<GL*.45)cur=mix(cur,texture(P,uv+vec2(0,.01)).rgb,.85);}  // datamosh: stale blocks
  if(SPL>0.){vec2 q=(uv-.5)*vec2(RES.x/RES.y,1.);float a=atan(q.y,q.x),r=length(q);float cell=floor(a*40.);float h=hh(vec2(cell,1.));
   float z=fract(h*7.+TM*(1.5+h*2.));float st=smoothstep(.02,0.,abs(r-z*1.2)-z*.25)*step(.6,h)*smoothstep(.15,.4,r);
-  cur+=vec3(.7,.85,1.)*st*SPL*.5*(1.-abs(fract(a*40.)-.5)*2.);}                 // objects/streaks hurtling past
+  st*=SPL*(1.-abs(fract(a*40.)-.5)*2.);vec3 sc=texture(S,.5+(uv-.5)*.55).rgb;   // streaks take the scene's own colour (no flat grey wash), and carve contrast
+  cur=cur*(1.-.35*min(st,1.))+(sc*1.6+vec3(.01,.02,.05))*st*.45;}                 // objects/streaks hurtling past
  vec3 o=TA>0.?mix(texture(P,uv).rgb,cur,TA):max(cur,pr*DECAY);if(any(isnan(o)))o=vec3(0);
  O=vec4(min(o,vec3(12.)),1);}`;
 const FS_DOWN=`#version 300 es
@@ -548,7 +667,7 @@ function mkTex(w,h){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
 async function setupAsync(){Qp=QUALITY_PRESETS[QUALITY]||QUALITY_PRESETS.medium;
   const ext=gl.getExtension('KHR_parallel_shader_compile');
   const jobs=[['scene',FS_SCENE,VS_FULL,`#define STEPS ${Qp.steps}\n#define BSTEPS ${Qp.steps*2}\n#define QL ${Qp.ql}`],['part',FS_PART,VS_PART,''],['dof',FS_DOF,VS_FULL,`#define DOFTAPS ${Qp.dof}`],
-    ['feed',FS_FEED,VS_FULL,''],['down',FS_DOWN,VS_FULL,''],['up',FS_UP,VS_FULL,''],['final',FS_FINAL,VS_FULL,''],['lum',FS_LUM,VS_FULL,''],['adapt',FS_ADAPT,VS_FULL,''],['mix',FS_MIX,VS_FULL,'']];
+    ['feed',FS_FEED,VS_FULL,''],['down',FS_DOWN,VS_FULL,''],['up',FS_UP,VS_FULL,''],['final',FS_FINAL,VS_FULL,''],['lum',FS_LUM,VS_FULL,''],['adapt',FS_ADAPT,VS_FULL,''],['mix',FS_MIX,VS_FULL,''],['gen',FS_GEN,VS_FULL,`#define GSTEPS ${Math.min(110,Qp.steps)}`]];
   lprog(3,0,'compiling shaders…');await yieldUI();
   const ins=(s,d)=>s.replace('#version 300 es','#version 300 es\n'+d),pend=[];
   for(const [n,fs,vs,d] of jobs){const p=gl.createProgram();for(const [ty,src] of [[gl.VERTEX_SHADER,vs],[gl.FRAGMENT_SHADER,fs]]){const sh=gl.createShader(ty);gl.shaderSource(sh,ins(src,d));gl.compileShader(sh);gl.attachShader(p,sh);}
@@ -558,7 +677,9 @@ async function setupAsync(){Qp=QUALITY_PRESETS[QUALITY]||QUALITY_PRESETS.medium;
     const u={};p.u=k=>(k in u)?u[k]:(u[k]=gl.getUniformLocation(p,k));P[n]=p;if(ext){lprog(3,Object.keys(P).length/jobs.length,'linked: '+n);await yieldUI();}}
   lprog(3,1);setupTex();
   // warm-up: draw every scene once offscreen so the driver finishes lazy work before Start
-  const ws=[2,60,130,200,300,431];for(let k=0;k<ws.length;k++){lprog(4,k/ws.length,'GPU warm-up…');renderAt(ws[k],performance.now());gl.finish();await yieldUI();}
+  const ws=[2,60,130,200,300,431];for(let k=0;k<ws.length;k++){lprog(4,k/(ws.length+4),'GPU warm-up…');renderAt(ws[k],performance.now());gl.finish();await yieldUI();}
+  for(let k=0;k<4;k++){lprog(4,(ws.length+k)/(ws.length+4),'Warming scene generator…');FORCE_SHOT=genShot(k*101+7,k);FORCE_SHOT.t0=199;FORCE_SHOT.t1=204;renderAt(200,performance.now());gl.finish();FORCE_SHOT=null;await yieldUI();}   // precompile the generator: no hitch on the first generated shot
+  ['pentagram','metatron','hexagram','yantra','eye'].forEach(sigilPts);lastShot=null;lastT=null;
   lastShot=null;aeFirst=true;gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);lprog(4,1,'ready');}
 let setupQ=null;function setupTex(){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
@@ -566,7 +687,7 @@ let setupQ=null;function setupTex(){const t=gl.createTexture();gl.bindTexture(gl
 function setup(){Qp=QUALITY_PRESETS[QUALITY]||QUALITY_PRESETS.medium;
   P.scene=compile(FS_SCENE,VS_FULL,`#define STEPS ${Qp.steps}\n#define BSTEPS ${Qp.steps*2}\n#define QL ${Qp.ql}`);P.part=compile(FS_PART,VS_PART);
   P.mix=compile(FS_MIX);P.dof=compile(FS_DOF,VS_FULL,`#define DOFTAPS ${Qp.dof}`);
-  P.feed=compile(FS_FEED);P.down=compile(FS_DOWN);P.up=compile(FS_UP);P.final=compile(FS_FINAL);P.lum=compile(FS_LUM);P.adapt=compile(FS_ADAPT);
+  P.feed=compile(FS_FEED);P.down=compile(FS_DOWN);P.up=compile(FS_UP);P.final=compile(FS_FINAL);P.lum=compile(FS_LUM);P.adapt=compile(FS_ADAPT);P.gen=compile(FS_GEN,VS_FULL,`#define GSTEPS ${Math.min(110,Qp.steps)}`);
   const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   T_txt={t};resize();}
@@ -584,7 +705,7 @@ function draw(prog,target,w,h,tex,uni){gl.useProgram(prog);gl.bindFramebuffer(gl
   setU(prog,uni);gl.drawArrays(gl.TRIANGLES,0,3);}
 
 // ============================ TYPOGRAPHY (canvas text -> texture, glow via shadowBlur) ============================
-const TC=document.createElement('canvas');TC.width=1600;TC.height=800;const tx=TC.getContext('2d');
+const TC=document.createElement('canvas');TC.width=1600;TC.height=800;let tx=TC.getContext('2d');
 const FONT='"Helvetica Neue","Segoe UI",Montserrat,"Inter",Arial,sans-serif';
 const sm=(a,b,x)=>{const t=Math.max(0,Math.min(1,(x-a)/(b-a)));return t*t*(3-2*t);};
 function glowText(s,x,y,font,sp,alpha,blur,col='#fff',glow='rgba(110,215,255,.95)'){if(alpha<=0)return;
@@ -710,8 +831,20 @@ function drawFX(t){const bl=60/map.bpm,B=map.beats,bi=bs(B,t),bt=bi>=0?B[bi]:0,b
   // 3) single-beat sigil inserts on some downbeats (snap in, fade over the beat; small, not a full-screen flash)
   if(bi%16===8&&bi>32&&bu<1&&(Math.floor(bi/16)*2654435761>>>0)%3===0){drawSigil(SIGILS[(bi>>4)%SIGILS.length],.55*(1-bu),190+40*(1-bu),bi*.7,['#ffe0a0','#ffffff','#9fe8ff'][(bi>>4)%3]);any=1;}
   // 4) the big reveal: eye-in-triangle on drops that land on the Watchers (eyes) scene, and on the last drop
-  for(const d of map.drops){const u=t-d;if(u>-.05&&u<bl*8&&(shotAt(d+.01)?.sc===5||d===map.drops[map.drops.length-1])){const a=sm(-.05,.2,u)*(1-sm(bl*5,bl*8,u));drawSigil('eye',.7*a,250+u*12,u*.3,'#ffe6a8');any=1;}}
+  for(const d of map.drops){const u=t-d;if(u>-.05&&u<bl*8&&(shotAt(d+.01)?.sc===5||d===map.drops[1]||d===map.drops[map.drops.length-1])){const a=sm(-.05,.2,u)*(1-sm(bl*5,bl*8,u));drawSigil('eye',.7*a,250+u*12,u*.3,'#ffe6a8');any=1;}}
+  // 5) particle swarm snaps into a sigil on selected downbeats, holds, then bursts apart by the end of the bar
+  const b0=bi-(((bi%8)+8)%8),ub=(t-(B[b0]||0))/bl,hk=(b0*2654435761>>>0)%5;
+  if(!SAFE_MODE&&b0>40&&hk<2&&ub<4&&!map.drops.some(d=>Math.abs(t-d)<bl*9)&&brkAmt(t)<.5){
+    const kind=['pentagram','metatron','hexagram','yantra','eye'][(b0>>3)%5],pts=sigilPts(kind),rr=mulberry(b0);
+    const sn=1-Math.pow(1-Math.min(1,ub/.25),3),ex=Math.max(0,(ub-2.5)/1.5),a=.85*(1-ex);
+    tx.save();tx.fillStyle=['#ffe0a0','#9fe8ff','#ffffff'][(b0>>3)%3];tx.globalAlpha=a;
+    for(const q of pts){const sx=rr()*1600,sy=rr()*800,an=rr()*6.283;const x=sx+(q[0]-sx)*sn+Math.cos(an)*ex*ex*500,y=sy+(q[1]-sy)*sn+Math.sin(an)*ex*ex*500;tx.fillRect(x,y,2.4,2.4);}
+    tx.restore();any=1;}
   const m=drawMessage(t,bl);return Math.max(m,any?1:0);}
+const SPTS={};function sigilPts(kind){if(SPTS[kind])return SPTS[kind];const c=document.createElement('canvas');c.width=1600;c.height=800;const keep=tx;tx=c.getContext('2d');
+  drawSigil(kind,1,260,0,'#fff');tx.shadowBlur=0;const d=tx.getImageData(0,0,1600,800).data;tx=keep;const all=[];
+  for(let y=0;y<800;y+=3)for(let x=0;x<1600;x+=3)if(d[(y*1600+x)*4+3]>140)all.push([x,y]);const rr=mulberry(kind.length*77),out=[];
+  for(let i=0;i<Math.min(900,all.length);i++)out.push(all[Math.floor(rr()*all.length)]);return SPTS[kind]=out;}
 function uploadText(){gl.bindTexture(gl.TEXTURE_2D,T_txt.t);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,TC);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);}
 
@@ -814,7 +947,7 @@ function timeline(t){const n=map.sections.length,i=Math.max(0,Math.min(SECTION_S
   return {i,A,B,p,ty};}
 
 // ============================ THE EDIT ================================
-const SCN=['galaxy','giant','tunnel','geometry','bulb','eyes'];
+const SCN=['galaxy','giant','tunnel','geometry','bulb','eyes','gen'];
 // per-scene camera-setup rules: allowed camera mode, distance range, st range, base motion speed, trail, DoF aperture
 const RULES=[
   {cm:0,dist:[.35,1.9],pitch:[-.5,1.3],yaw:3.14,st:[4,70],spd:[2,4],trail:.35,ap:.15,vars:[0,0,2]},
@@ -822,12 +955,32 @@ const RULES=[
   {cm:1,dist:[1,1],pitch:[-.12,.12],yaw:.15,st:[2,110],spd:[1.6,3],trail:.55,ap:.2,vars:[0,1]},
   {cm:1,dist:[.6,2.5],pitch:[-.6,.6],yaw:1.2,st:[10,140],spd:[3,6],trail:.35,ap:.5,vars:[0,1]},
   {cm:0,dist:[.85,1.8],pitch:[-.25,.25],yaw:.6,st:[3,40],spd:[1.5,3],trail:0,ap:.7,vars:[0]},
-  {cm:1,dist:[.4,3.5],pitch:[-.5,.5],yaw:.9,st:[25,70],spd:[2,4],trail:.2,ap:.8,vars:[1]}];
+  {cm:1,dist:[.4,3.5],pitch:[-.5,.5],yaw:.9,st:[25,70],spd:[2,4],trail:.2,ap:.8,vars:[1]},
+  {cm:0,dist:[.75,1.3],pitch:[-.3,.4],yaw:3.14,st:[0,60],spd:[1.6,3.2],trail:.25,ap:.25,vars:[0]}];
 // "inserts": short punchy setups layered on the same six generators
 const INSERTS=[
   {name:'fractal ECU',sc:4,dist:.8,fov:2.4,ap:1.2},{name:'single eye ECU',sc:5,dist:3.6,fov:2.6,ap:1.3,pitch:0,yaw:0},
   {name:'ring skim',sc:1,dist:.62,pitch:-.32,fov:1.3,orbit:1.6},{name:'tunnel whip',sc:2,cut:'whip',spd:5},
   {name:'wire flash',sc:3,grade:2,fov:.8,spd:8},{name:'kaleidoscope',sc:-1,kal:3},{name:'particle burst',sc:0,dist:.4,burst:1,push:.4}];
+// ---- procedural scene generator: curated cosine palettes + seeded parameters (ugly ranges rejected) ----
+const GPALS=[[[.5,.5,.5],[.5,.5,.5],[1,1,1],[0,.1,.2]],[[.5,.5,.5],[.5,.5,.5],[1,1,1],[.3,.2,.2]],[[.5,.5,.5],[.5,.5,.5],[1,1,.5],[.8,.9,.3]],
+ [[.5,.5,.5],[.5,.5,.5],[1,.7,.4],[0,.15,.2]],[[.5,.5,.5],[.5,.5,.5],[2,1,0],[.5,.2,.25]],[[.8,.5,.4],[.2,.4,.2],[2,1,1],[0,.25,.25]],
+ [[.4,.5,.6],[.4,.4,.4],[1,1,1],[.55,.6,.65]],[[.55,.45,.3],[.45,.35,.25],[1,1,1],[0,.05,.1]],[[.3,.5,.55],[.3,.4,.45],[1,1,1],[.6,.5,.45]],
+ [[.5,.45,.55],[.45,.35,.5],[1,1,1],[.7,.85,.95]],[[.6,.55,.45],[.4,.4,.35],[1,.8,.6],[.1,.2,.35]],[[.45,.6,.6],[.35,.4,.45],[.8,1,1],[.35,.5,.7]]];
+const GEN_FOLD_OK={0:[0,1,2,3,4,5,6],1:[0,1,2,3,4,5,6],2:[0,1,2,3,4,5,6],3:[0,1,3,5],4:[0,1,2,3,4,5,6],5:[0,1,2,4,5,6]};   // mandelbox only with compact prims
+function genParams(seed){const r=mulberry(seed*7919+13),R_=(a,b)=>a+(b-a)*r(),pk=a=>a[Math.floor(r()*a.length)];
+  const fold=pk([0,1,1,2,2,2,3,4,5]),prim=pk(GEN_FOLD_OK[fold]),pal=pk(GPALS.map((_,i)=>i));
+  const bounded=fold===2||fold===3,rig=bounded?pk([1,2,2,1]):fold===1?0:pk([0,0,3]);
+  const sym=r()<.14?(fold===1?1:pk([1,2])):0;
+  const g={G0:[prim,fold,pk([0,0,1,2]),pk([0,1,1,1,2,3])],G1:[fold===2?R_(2.2,3):fold===3?3.2:R_(1.6,3),R_(.1,.45)*(r()<.5?-1:1),fold===1?pk([5,6,8,3,7]):fold===2?R_(1.7,2):fold===3?pk([-1.6,-1.8,-2.2]):1,fold===1?R_(1,1.6):R_(.6,1.2)],
+    G2:[pk([0,0,1,2,3]),rig,sym,R_(.3,1)],G3:[R_(-.6,.6),R_(-.5,.5),fold===2?pk([3,4]):4,fold===3?R_(.8,1.2):fold===2?R_(.8,1.1):fold===1?R_(.5,.8):R_(.5,.8)],
+    PA:GPALS[pal][0],PB:GPALS[pal][1],PC:GPALS[pal][2],PD:GPALS[pal][3].map(x=>x+R_(-.08,.08))};
+  if(sym===1){g.G0[1]=1;g.G1[2]=5;}if(sym===2){g.G0[1]=1;g.G1[2]=6;}if(sym){g.G2[1]=0;g.G1[3]=Math.max(g.G1[3],1.9);}   // symbol gates: fly through them, geometry pushed outward                                       // pentagram fold: 5-fold kaleido + star gates
+  const fx=r()<.3?1+Math.floor(r()*9):0;                                  // ~30% are 2D/2.5D effect families (plasma, moire, rotozoom, voxels, metaballs, raster bars, starfield, julia, reaction-diffusion)
+  let style=r()<.35?0:1+Math.floor(r()*8);if(SAFE_MODE&&style===8)style=5;const pm=r()<.35?0:1+Math.floor(r()*7);
+  g.G4=[style,fx,pm,0];
+  g.attr={fam:fx?'fx'+fx:'p'+prim+(sym?'s'+sym:''),pal:pm?'m'+pm:'c'+pal,style,rig:fx?'fx':rig,bg:fx?'fx':g.G0[3]};
+  g.key=[style,fx,pm,fx?'':[prim,g.G0[1],g.G0[2],g.G0[3],g.G2[0],rig,sym],pal,g.G0[1],g.G0[2],g.G0[3],g.G2[0],rig,sym,pal,g.G0[1]===1||g.G0[1]===3?g.G1[2]:''].join('.');return g;}
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 let SHOTS=[],SHOT_T=[],SHOT_STATS=null;
 function buildShots(){buildShots0();buildMessages();}
@@ -844,7 +997,7 @@ function buildShots0(){
       st0:R_(r.st[0],r.st[1]),spd:R_(r.spd[0],r.spd[1]),trail:r.trail,ap:r.ap,zoom:0,spl:sc===2||sc===3?.6:.25,kal:0,grade:0,burst:0};
     if(c.dist<.6)c.ap=Math.max(c.ap,.8);if(rnd()<.12&&sc!==2){c.pitch=1.25;c.roll=0;}    // top-down
     return Object.assign(c,o);};
-  let i=0,prevSc=-9,shots=[];
+  let i=0,prevSc=-9,shots=[],genSeed=0;const usedKeys=new Set(),heroLast={};let prevAttr=null;
   while(i<nB-1){const t=B[i],e=Math.min(1,envAt(map.intensity,t)),brk=brkAmt(t),bld=buildAmt(t);
     const nd=dropBeats.find(d=>d>i),toDrop=nd===undefined?1e9:nd-i,sinceDrop=Math.min(...dropBeats.map(d=>i-d).filter(x=>x>=0),1e9);
     let lens,kind='normal';
@@ -865,16 +1018,26 @@ function buildShots0(){
     if(kind==='stutter'&&shots.length&&shots[shots.length-1].stut){const p=shots[shots.length-1];sh=Object.assign({},p,{t0,t1,cut:'hard'});}   // retrigger: same scene, same moment -> even luminance
     else{let sc;const pool=brk>.5?[0,1,4,home]:[0,1,2,3,4,5,home,home];
       do sc=home>=0&&rnd()<.3?home:pick(pool.filter(x=>x>=0));while(sc===prevSc);
-      sh=mkCam(sc);
-      if(kind!=='stutter'&&brk<.5&&rnd()<.16){const ins=pick(INSERTS);if(ins.sc>=0&&ins.sc!==prevSc)sh=mkCam(ins.sc,Object.assign({},ins));else if(ins.kal)sh.kal=ins.kal;sh.insert=ins.name;}
-      sh.cut=SAFE_MODE?'hard':kind==='drop'?'hard':pick(['hard','hard','hard','hard','hard','whip','whip','glitch','mirror']);
+      const heroTime=sinceDrop<4||kind==='drop';
+      const heroOk=x=>!(heroLast[x]!==undefined&&t-heroLast[x]<30);          // never the same hero setup twice within 30 s
+      if(!heroTime&&!heroOk(sc+'.'+0)){const alt=pool.filter(x=>x>=0&&x!==prevSc&&heroOk(x+'.'+0));sc=alt.length?pick(alt):-1;}
+      if(sc<0||(!heroTime&&rnd()<GEN_SHARE)){sh=mkCam(6);let g,tries=0;const pa=prevAttr;
+        do{genSeed++;g=genParams(EDIT_SEED*1000+genSeed);tries++;}
+        while((usedKeys.has(g.key)||(pa&&['fam','pal','style','rig','bg'].filter(k=>pa[k]!==g.attr[k]).length<3))&&tries<200);   // unique config; differ from the previous shot in >=3 of 5 axes
+        usedKeys.add(g.key);sh.gen=g;sh.cm=sh.gen.G2[1]===0||sh.gen.G2[1]===3?1:0;if(sh.cm===1){sh.dist=pick([1,1.2,1.4]);sh.pitch=0;}sc=6;}
+      else sh=mkCam(sc);
+      if(sc!==6&&kind!=='stutter'&&brk<.5&&rnd()<.16){const ins=pick(INSERTS);if(ins.sc>=0&&ins.sc!==prevSc)sh=mkCam(ins.sc,Object.assign({},ins));else if(ins.kal)sh.kal=ins.kal;sh.insert=ins.name;}
+      sh.cut=SAFE_MODE?'hard':kind==='drop'?'hard':(sc===6&&prevSc===6)||(sc===6&&rnd()<.4)?(rnd()<.8?'zoom':'hard'):pick(['hard','hard','hard','hard','zoom','zoom','whip','whip','glitch','mirror']);   // zoom-through is the main generated-scene transition
       if(sh.cut==='mirror'){sh.kal=pick([1,2,3]);}
       sh.grade=brk>.5?pick([0,2]):pick([0,0,0,1,2,3]);
       if(kind==='drop'&&!SAFE_MODE){sh.grid=pick([2,3]);sh.panels=[];for(let k=0;k<sh.grid*sh.grid;k++)sh.panels.push(mkCam([0,1,2,3,5][k%5],{fov:1.3}));sh.grade=0;}
       if(kind==='stutter'){sh.stut=1;sh.grade=0;sh.kal=0;}
       sh.wdir=rnd()<.5?-1:1;sh.t0=t0;sh.t1=t1;}
     if(sh.stut)sh.stut=1;
-    shots.push(sh);prevSc=sh.sc;i+=L;}
+    if(sh.sc===6&&!sh.stut&&sh.droste===undefined)sh.droste=rnd()<.14?pick([.35,.45,.5]):0;
+    if(sh.sc!==6&&!sh.stut&&!sh.grid)heroLast[sh.sc+'.'+0]=t0;
+    prevAttr=sh.gen?sh.gen.attr:{fam:'hero'+sh.sc,pal:'hero'+sh.sc,style:'hero',rig:'h'+sh.cm,bg:'hero'+sh.sc};
+    shots.push(sh);prevSc=sh.sc===6?-6:sh.sc;i+=L;}
   // never chain two whips/glitches; last shot runs to the end
   shots[shots.length-1].t1=map.duration+1;
   SHOTS=shots;SHOT_T=shots.map(x=>x.t0);
@@ -883,9 +1046,11 @@ function buildShots0(){
   const fast=lens.filter(x=>x<1/3).length;
   SHOT_STATS={shots:shots.length,avgLen:+avg(lens).toFixed(3),avgLenAtDrops:+avg(nearDrop).toFixed(3),minLen:+Math.min(...lens).toFixed(3),
     under333ms:fast,grids:shots.filter(x=>x.grid).length,inserts:shots.filter(x=>x.insert).length,
-    cuts:['hard','whip','glitch','mirror'].map(k=>k+':'+shots.filter(x=>x.cut===k).length).join(' ')};
+    gen:shots.filter(x=>x.sc===6).length,heroPct:+(100*shots.filter(x=>x.sc!==6).length/shots.length).toFixed(1),genUniqueCuts:new Set(shots.filter(x=>x.sc===6).map(x=>x.gen.key)).size,fx2d:shots.filter(x=>x.gen&&x.gen.G4[1]).length,styles:new Set(shots.filter(x=>x.gen).map(x=>x.gen.G4[0])).size,palModes:new Set(shots.filter(x=>x.gen).map(x=>x.gen.G4[2])).size,
+    minDiffAxes:Math.min(...shots.slice(1).map((x,k)=>{const a=x.gen?x.gen.attr:null,b=shots[k].gen?shots[k].gen.attr:null;if(x.stut||!a||!b)return 5;return ['fam','pal','style','rig','bg'].filter(q=>a[q]!==b[q]).length;})),genDistinct:new Set(shots.filter(x=>x.sc===6).map(x=>x.gen.key)).size,genSeeds:new Set(shots.filter(x=>x.gen).map(x=>JSON.stringify([x.gen.G0,x.gen.G1,x.gen.G3]))).size,
+    cuts:['hard','whip','glitch','mirror','zoom'].map(k=>k+':'+shots.filter(x=>x.cut===k).length).join(' ')};
   window.__shotStats=SHOT_STATS;console.log('edit',JSON.stringify(SHOT_STATS));}
-const shotAt=t=>SHOTS[Math.max(0,bs(SHOT_T,t))];
+let FORCE_SHOT=null;const shotAt=t=>FORCE_SHOT||SHOTS[Math.max(0,bs(SHOT_T,t))];
 
 // ============================ FRAME ================================
 let lastShot=null,sB=0,sM=0,sH=0,sE=0,sI=0,avgB=0,kick=0,snare=0,hat=0,snap=0,lastBeat=-1,lastKickT=-9,lastSec=-1,lastDropSeen=-1,lastSn=-1,lastHat=-1,
@@ -904,11 +1069,11 @@ function renderAt(t,now){
   // --- beats: grid + live bass onsets, retrigger ≤3/s. snare/hat accents from analysis ---
   const bi=bs(map.beats,t);
   if(bi!==lastBeat){lastBeat=bi;if(t-lastKickT>.33){kick=(bi%4==0?1:.6)*(1-.6*brk);lastKickT=t;}
-    if(!SAFE_MODE&&brk<.5&&(sI>.4||drop>.2))snap=SNAP_ZOOM*(bi%4==0?1:.45)*(.5+.5*Math.min(1,sI+drop));}   // zoom punch on every beat
+    if(!SAFE_MODE&&brk<.5&&(sI>.4||drop>.2))snap=SNAP_ZOOM*ZOOM_PUNCH*(bi%4==0?1.3:.45)*(.5+.5*Math.min(1,sI+drop));}   // zoom punch on every beat
   if(an&&bass>avgB*1.4&&bass>.35&&t-lastKickT>.33){kick=Math.max(kick,.8);lastKickT=t;}
   avgB=avgB*.95+bass*.05;
-  const si_=bs(map.snares,t);if(si_!==lastSn){lastSn=si_;snare=1;}const hi_=bs(map.hats,t);if(hi_!==lastHat){lastHat=hi_;hat=1;}
-  if(ld!==lastDropSeen){if(lastDropSeen!==-1&&t-ld<.5){tryFlash(t,SECTION_FLASH);snap=SAFE_MODE?0:SNAP_ZOOM*1.4;}lastDropSeen=ld;}
+  const si_=bs(map.snares,t);if(si_!==lastSn){lastSn=si_;snare=1;if(!SAFE_MODE&&brk<.5)snap=Math.max(snap,.3*SNAP_ZOOM*ZOOM_PUNCH*(.4+Math.min(1,sI+drop)));}const hi_=bs(map.hats,t);if(hi_!==lastHat){lastHat=hi_;hat=1;}
+  if(ld!==lastDropSeen){if(lastDropSeen!==-1&&t-ld<.5){tryFlash(t,SECTION_FLASH);snap=SAFE_MODE?0:SNAP_ZOOM*ZOOM_PUNCH*1.6;}lastDropSeen=ld;}
   // --- the edit ---
   const sh=shotAt(t),u=t-sh.t0,len=sh.t1-sh.t0,cutFrame=sh!==lastShot;lastShot=sh;
   if(cutFrame&&!sh.stut)jit=0;
@@ -919,13 +1084,19 @@ function renderAt(t,now){
   if(taa){jit=(jit+1)%8;const h=(i,b)=>{let f=1,r=0;while(i>0){f/=b;r+=f*(i%b);i=Math.floor(i/b);}return r;};base.JIT=[h(jit+1,2)-.5,h(jit+1,3)-.5];}
   // whip-pan: the camera is still swinging into the new framing for the first ~.14 s
   const wk=sh.cut==='whip'?Math.max(0,1-u/.14):0,whip=wk*wk*1.3*sh.wdir;
+  // ZOOM: continuous push-in under every shot, Vertigo dolly-zoom on builds, crash-zoom out of / dive into zoom-through cuts
+  const si=SHOTS.indexOf(sh),nx=SHOTS[si+1],toEnd=len-u;
+  const crashOut=!SAFE_MODE&&nx&&nx.cut==='zoom'?Math.pow(Math.max(0,1-toEnd/.24),2):0;
+  const diveIn=sh.cut==='zoom'&&!SAFE_MODE?Math.max(0,1-u/.3):0;
+  const zFov=(1+ZOOM_AMOUNT*.14*Math.min(u,4))*(1+ZOOM_AMOUNT*2.6*crashOut)/(1+ZOOM_AMOUNT*.9*diveIn*diveIn);
+  const dolly=1+ZOOM_AMOUNT*.9*build*Math.min(1,u/Math.max(.5,len));
   const shotU=(c,uu)=>{const st=c.st0+uu*c.spd*MOTION*(1-.2*brk);
-    const u2=Object.assign({},base,{SC:c.sc,VAR:c.var,ST:st,FOVM:c.fov*(1+c.zoomIn*uu),CM:c.cm,
-      CV:[c.yaw+c.orbit*uu+whip,c.pitch,Math.max(.25,c.dist*(1-c.push*Math.min(uu,1.5))),c.roll+c.rollSpd*uu]});
-    if(c.sc===4){const q=bulbCam(t,st,0);u2.CRO=q.ro;u2.CTA=q.ta;}return u2;};
+    const u2=Object.assign({},base,{SC:c.sc,VAR:c.var,ST:st,FOVM:c.fov*(1+c.zoomIn*uu)*zFov*dolly,CM:c.cm,
+      CV:[c.yaw+c.orbit*uu+whip,c.pitch,Math.max(.25,c.dist*(1-c.push*Math.min(uu,1.5))*dolly),c.roll+c.rollSpd*uu]});
+    if(c.sc===4){const q=bulbCam(t,st,0);u2.CRO=q.ro;u2.CTA=q.ta;}if(c.gen)Object.assign(u2,c.gen);return u2;};
   const render=(target,u2,x,y,w,h)=>{gl.bindFramebuffer(gl.FRAMEBUFFER,target.f);
     if(w){gl.enable(gl.SCISSOR_TEST);gl.scissor(x,y,w,h);}
-    gl.useProgram(P.scene);setU(P.scene,u2);gl.viewport(x||0,y||0,w||W,h||H);gl.drawArrays(gl.TRIANGLES,0,3);
+    const pr_=u2.SC===6?P.gen:P.scene;gl.useProgram(pr_);setU(pr_,u2);gl.viewport(x||0,y||0,w||W,h||H);gl.drawArrays(gl.TRIANGLES,0,3);
     if(u2.SC===0){gl.useProgram(P.part);gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.ONE,gl.ONE,gl.ZERO,gl.ONE);
       setU(P.part,u2);gl.uniform1f(P.part.u('PSCALE'),1.4*(80000/Qp.particles)*(1+.5*build)*(sh.burst?2.2:1));gl.drawArrays(gl.POINTS,0,Qp.particles);gl.disable(gl.BLEND);}
     gl.disable(gl.SCISSOR_TEST);};
@@ -938,9 +1109,10 @@ function renderAt(t,now){
   // 3) feedback: hard cuts reset the history (clean cut), glitch cuts datamosh it, motion blur on whips / push-ins
   const prev=T_trail[cur];cur^=1;
   const gk=sh.cut==='glitch'?Math.max(0,1-u/.22):0;
-  const decay=cutFrame&&sh.cut!=='glitch'?0:Math.pow(sh.trail*(SAFE_MODE?.9:1),dt*30);
-  const rb=(sh.push>0||sh.sc===2?.05:.015)*(1+sI+drop)*(SAFE_MODE?.5:1);
-  draw(P.feed,T_trail[cur],W,H,{S:T_d,P:prev},{RES:[W,H],DECAY:decay,ZOOM:sh.zoom*(1+sE+build),ROT:0,TA:taa?(cutFrame?1:.4):0,
+  const decay=diveIn>0?.93*diveIn:cutFrame&&sh.cut!=='glitch'?0:Math.pow(sh.trail*(SAFE_MODE?.9:1),dt*30);   // zoom-through: the old frame keeps diving outward over the new scene
+  const zoomV=Math.min(1,crashOut+diveIn+.4*snap+.5*build*ZOOM_AMOUNT);
+  const rb=((sh.push>0||sh.sc===2?.05:.02)*(1+sI+drop)+.16*zoomV*ZOOM_AMOUNT)*(SAFE_MODE?.4:1);
+  draw(P.feed,T_trail[cur],W,H,{S:T_d,P:prev},{RES:[W,H],DECAY:decay,ZOOM:diveIn>0?-.09*ZOOM_AMOUNT:sh.zoom*(1+sE+build),DR:sh.droste||0,DRP:(u*.55*ZOOM_AMOUNT)%1,ROT:0,TA:taa?(cutFrame?1:.4):0,
     GL:SAFE_MODE?0:gk,RB:rb,BV:[wk*.09*sh.wdir,0],SPL:sh.spl*(.4+sI+drop),TM:t,KAL:sh.kal});
   // 4) bloom chain
   let bsrc=T_trail[cur];
@@ -963,5 +1135,7 @@ function renderAt(t,now){
   fpsN++;if(now-fpsT>500){fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now;
     fpsEl.textContent=`${fps.toFixed(1)} fps  ${W}x${H} ${QUALITY}${SAFE_MODE?' SAFE':''}\nshot ${SHOTS.indexOf(sh)}/${SHOTS.length} ${SCN[sh.sc]} ${sh.cut}${sh.grid?' grid'+sh.grid:''}${sh.stut?' stutter':''}  t=${t.toFixed(1)}s  ${map.bpm} BPM\nint ${sI.toFixed(2)} build ${build.toFixed(2)} break ${brk.toFixed(2)}`;}}
 function frame(now){const t=TEST_T!==null?TEST_T+frames/30:Math.max(0,ac.currentTime-t0);renderAt(t,now);requestAnimationFrame(frame);}
+function genShot(seed,fold){const g=genParams(seed);if(fold!==undefined&&fold<4){}return {sc:6,cm:g.G2[1]===0||g.G2[1]===3?1:0,var:0,yaw:0,pitch:0,dist:1,roll:0,rollSpd:0,fov:1,orbit:0,push:0,zoomIn:0,st0:20+seed%17,spd:2,trail:.2,ap:.2,zoom:0,spl:0,kal:0,grade:0,gen:g,t0:-1e9,t1:1e9,cut:'hard',wdir:1};}
+window.__renderGen=(seed,t=200)=>{FORCE_SHOT=genShot(seed);FORCE_SHOT.t0=t-1.2;FORCE_SHOT.t1=t+4;lastShot=null;for(let k=0;k<3;k++)renderAt(t+k*.04,performance.now());FORCE_SHOT=null;gl.finish();return genParams(seed).key;};
 window.__render=t=>{renderAt(t,performance.now());gl.finish();return true;};   // offline capture hook (?manual=1)
 </script></body></html>
