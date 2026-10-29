@@ -131,7 +131,7 @@ vec3 sceneNebula(vec3 ro,vec3 rd){
   float disc=exp(-abs(p.y)*.9)*exp(-r*.11);
   float arm=pow(.5+.5*cos(sw),2.);
   float n=fbm(p*.22+vec3(0,T*.02,T*.01));
-  float d=max(0.,n-.5)*(.05+disc*(1.+arm*4.))*3.+max(0.,n-.66)*2.*exp(-length(p)*.08);
+  float d=pow(max(0.,n-.56)*2.3,1.6)*(.02+disc*(1.+arm*4.))*3.+max(0.,n-.7)*1.6*exp(-length(p)*.08);   // wispy, lots of dark space
   vec3 c=mix(vec3(1.,.08,.55),vec3(.05,.55,1.),smoothstep(.35,.75,n+.15*sin(r*.3)));
   c=mix(c,vec3(1.,.55,.12),disc*disc*1.5);
   if(VAR==2){c=c.zxy*vec3(.6,.4,1.);d*=.5;}
@@ -143,8 +143,8 @@ vec3 sceneNebula(vec3 ro,vec3 rd){
    acc+=tr*sc*exp(-qr*.2)*(.2+arm2*1.6)*(.5+fn)*sl*.18*(1.+ENERGY+BASS);
    float dl=pow(.5+.5*cos(qs+.8),6.)*smoothstep(1.,3.,qr)*exp(-qr*.05)*smoothstep(.35,.65,fbm3(vec3(q.xz*.9,4.)));
    tr*=exp(-dl*sl*(VAR==2?.4:1.1));}
-  acc+=tr*c*d*dt*(1.3+ENERGY*1.5+BASS);
-  acc+=tr*vec3(1.,.75,.45)*.03/(.02+dot(p,p)*.4)*dt*(1.+BASS);
+  acc+=tr*c*d*dt*.55*(1.+.6*ENERGY+.4*BASS);
+  acc+=tr*vec3(1.,.75,.45)*.012/(.02+dot(p,p)*.4)*dt*(1.+.5*BASS);
   tr*=exp(-d*.5*dt);t+=dt;if(tr<.03||t>70.)break;}
  return acc*.6+tr*stars(rd);}
 
@@ -392,7 +392,8 @@ void main(){
  vec3 col;
  if(SC==0)col=sceneNebula(ro,rd);else if(SC==1)col=scenePlanet(ro,rd);else if(SC==2)col=sceneTunnel(ro,rd);
  else if(SC==3)col=sceneGeo(ro,rd);else if(SC==4)col=sceneBulb(ro,rd);else col=sceneEyes(ro,rd);
- O=vec4(max(col,0.),DEP/(DEP+8.));      // depth in alpha for the DoF pass
+ if(any(isnan(col))||any(isinf(col)))col=vec3(0);   // half-float safety: never let NaN/Inf into the feedback loop
+ O=vec4(clamp(col,0.,24.),DEP/(DEP+8.));      // depth in alpha for the DoF pass
 }`;
 
 // GPU particle galaxy: positions computed from gl_VertexID (no buffers)
@@ -451,27 +452,40 @@ const FS_FEED=`#version 300 es
 precision highp float;uniform sampler2D S,P;uniform vec2 RES;uniform float DECAY,ZOOM,ROT,TA;out vec4 O;
 void main(){vec2 uv=gl_FragCoord.xy/RES;vec2 c=uv-.5;c*=1.-ZOOM;c=mat2(cos(ROT),-sin(ROT),sin(ROT),cos(ROT))*c;
  vec3 cur=texture(S,uv).rgb,pr=texture(P,c+.5).rgb;
- O=vec4(TA>0.?mix(texture(P,uv).rgb,cur,TA):max(cur,pr*DECAY),1);}`;
+ vec3 o=TA>0.?mix(texture(P,uv).rgb,cur,TA):max(cur,pr*DECAY);if(any(isnan(o)))o=vec3(0);
+ O=vec4(min(o,vec3(12.)),1);}`;
 const FS_DOWN=`#version 300 es
 precision highp float;uniform sampler2D S;uniform vec2 RES,TX;uniform float TH;out vec4 O;
 void main(){vec2 uv=gl_FragCoord.xy/RES;
  vec3 c=texture(S,uv).rgb*4.+texture(S,uv+TX*vec2(-1,-1)).rgb+texture(S,uv+TX*vec2(1,-1)).rgb+texture(S,uv+TX*vec2(-1,1)).rgb+texture(S,uv+TX).rgb;c/=8.;
- if(TH>0.){float l=max(c.r,max(c.g,c.b));c*=max(0.,l-TH)/max(l,1e-4);}O=vec4(min(c,vec3(60.)),1);}`;
+ if(TH>0.){float l=max(c.r,max(c.g,c.b)),kn=TH*.5,s=clamp(l-TH+kn,0.,2.*kn);s=s*s/(4.*kn+1e-4);c*=max(s,l-TH)/max(l,1e-4);}   // soft-knee threshold
+ if(any(isnan(c)))c=vec3(0);O=vec4(min(c,vec3(16.)),1);}`;
 const FS_UP=`#version 300 es
 precision highp float;uniform sampler2D S;uniform vec2 RES,TX;out vec4 O;
 void main(){vec2 uv=gl_FragCoord.xy/RES;vec3 c=vec3(0);
  c+=texture(S,uv+TX*vec2(-2,0)).rgb+texture(S,uv+TX*vec2(2,0)).rgb+texture(S,uv+TX*vec2(0,-2)).rgb+texture(S,uv+TX*vec2(0,2)).rgb;
  c+=(texture(S,uv+TX*vec2(-1,-1)).rgb+texture(S,uv+TX*vec2(1,-1)).rgb+texture(S,uv+TX*vec2(-1,1)).rgb+texture(S,uv+TX).rgb)*2.;O=vec4(c/12.,1);}`;
+// auto-exposure: log-average luminance of the frame (32x18), then a 1x1 adapted value (ping-pong, GPU only, no readback)
+const FS_LUM=`#version 300 es
+precision highp float;uniform sampler2D S;uniform vec2 RES;out vec4 O;
+void main(){vec2 b=floor(gl_FragCoord.xy)/RES;float a=0.;
+ for(int y=0;y<6;y++)for(int x=0;x<6;x++){vec3 c=texture(S,b+(vec2(x,y)+.5)/(RES*6.)).rgb;a+=log(1e-3+dot(c,vec3(.2126,.7152,.0722)));}
+ O=vec4(a/36.,0,0,1);}`;
+const FS_ADAPT=`#version 300 es
+precision highp float;uniform sampler2D S,P;uniform float K;out vec4 O;
+void main(){float a=0.;for(int y=0;y<18;y++)for(int x=0;x<32;x++)a+=texelFetch(S,ivec2(x,y),0).r;
+ float l=exp(a/576.),pv=texelFetch(P,ivec2(0),0).r;O=vec4(pv<=0.?l:mix(pv,l,K),0,0,1);}`;
 // final: chromatic aberration, bloom, ACES, vignette, gamma, grain, typography overlay, fade
 const FS_FINAL=`#version 300 es
-precision highp float;uniform sampler2D S,B,X;uniform vec2 RES;uniform float EXPO,FADE,GR,CA,BK,TM,SAT,XA;out vec4 O;
+precision highp float;uniform sampler2D S,B,X,AE;uniform vec2 RES;uniform float AEON,EXPO,FADE,GR,CA,BK,TM,SAT,XA;out vec4 O;
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 void main(){vec2 uv=gl_FragCoord.xy/RES,d=uv-.5;float k=CA*dot(d,d)*4.;
  vec3 c=vec3(texture(S,uv-d*k).r,texture(S,uv).g,texture(S,uv+d*k).b);
  vec3 b=vec3(texture(B,uv-d*k*2.).r,texture(B,uv).g,texture(B,uv+d*k*2.).b);
- c=(c+b*BK)*EXPO;float l=dot(c,vec3(.2126,.7152,.0722));c=max(mix(vec3(l),c,SAT),0.);
+ float al=max(texelFetch(AE,ivec2(0),0).r,1e-3),ae=AEON>0.?clamp(.14/al,.3,1.4):1.;   // target mid-grey, clamped
+ c=(c+b*BK)*EXPO*ae;float l=dot(c,vec3(.2126,.7152,.0722));c=max(mix(vec3(l),c,SAT),0.);
  c=aces(c);c*=1.-.65*smoothstep(.25,.85,length(d*vec2(RES.x/RES.y,1.)*.85));
- c=pow(c,vec3(1./2.2));
+ c=pow(c,vec3(1./2.2));c=mix(c,c*c*(3.-2.*c),.3);c=max(c-.012,0.)*1.012;   // contrast + deep blacks
  if(XA>0.){vec2 p=d*vec2(RES.x/RES.y,1.);vec4 tx=texture(X,vec2(p.x*.5+.5,p.y+.5))*XA;c=c*(1.-tx.a*.8)+tx.rgb;}
  c+=(fract(sin(dot(gl_FragCoord.xy+TM*61.,vec2(12.9898,78.233)))*43758.5453)-.5)*GR;
  O=vec4(c*FADE,1);}`;
@@ -491,13 +505,14 @@ function mkTex(w,h){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
 function setup(){Qp=QUALITY_PRESETS[QUALITY]||QUALITY_PRESETS.medium;
   P.scene=compile(FS_SCENE,VS_FULL,`#define STEPS ${Qp.steps}\n#define BSTEPS ${Qp.steps*2}\n#define QL ${Qp.ql}`);P.part=compile(FS_PART,VS_PART);
   P.mix=compile(FS_MIX);P.dof=compile(FS_DOF,VS_FULL,`#define DOFTAPS ${Qp.dof}`);
-  P.feed=compile(FS_FEED);P.down=compile(FS_DOWN);P.up=compile(FS_UP);P.final=compile(FS_FINAL);
+  P.feed=compile(FS_FEED);P.down=compile(FS_DOWN);P.up=compile(FS_UP);P.final=compile(FS_FINAL);P.lum=compile(FS_LUM);P.adapt=compile(FS_ADAPT);
   const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(4));
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   T_txt={t};resize();}
 function resize(){if(!Qp)return;const dpr=Math.min(devicePixelRatio||1,Qp.dpr);
   cv.width=innerWidth*dpr|0;cv.height=innerHeight*dpr|0;W=Math.max(16,cv.width*Qp.scale|0);H=Math.max(16,cv.height*Qp.scale|0);
   T_a=mkTex(W,H);T_b=mkTex(W,H);T_m=mkTex(W,H);T_d=mkTex(W,H);T_trail=[mkTex(W,H),mkTex(W,H)];T_bloom=[];let w=W,h=H;
+  T_lum=mkTex(32,18);T_ae=[mkTex(1,1),mkTex(1,1)];aeI=0;aeFirst=true;
   for(let i=0;i<Qp.bloom;i++){w=Math.max(2,w>>1);h=Math.max(2,h>>1);T_bloom.push(mkTex(w,h));}}
 addEventListener('resize',resize);
 const INTS=new Set(['SC','VAR','TY']);
@@ -535,6 +550,7 @@ function uploadText(){gl.bindTexture(gl.TEXTURE_2D,T_txt.t);gl.pixelStorei(gl.UN
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,TC);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);}
 
 // ============================ MUSIC ================================
+let T_lum,T_ae,aeI=0,aeFirst=true;
 let map=null,ac=null,buf=null,an=null,fft=null,t0=0,synth=false,WARP=null;
 async function loadAll(){
   try{map=await (await fetch(BEATS_FILE)).json();}catch(e){console.warn('no beats.json');}
@@ -644,7 +660,7 @@ function renderAt(t,now){
   const passU=(s,xp)=>{const u=Object.assign({},base,{SC:s.sc,VAR:s.var,ST:s.st,XP:xp});if(s.sc===4){const c=bulbCam(t,s.st,xp);u.CRO=c.ro;u.CTA=c.ta;}return u;};
   const render=(target,u)=>{draw(P.scene,target,W,H,{},u);
     if(u.SC===0){gl.useProgram(P.part);gl.bindFramebuffer(gl.FRAMEBUFFER,target.f);gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.ONE,gl.ONE,gl.ZERO,gl.ONE);
-      setU(P.part,u);gl.uniform1f(P.part.u('PSCALE'),1.4*Math.sqrt(80000/Qp.particles)*(1+.5*build));gl.drawArrays(gl.POINTS,0,Qp.particles);gl.disable(gl.BLEND);}};
+      setU(P.part,u);gl.uniform1f(P.part.u('PSCALE'),1.4*(80000/Qp.particles)*(1+.5*build));gl.drawArrays(gl.POINTS,0,Qp.particles);gl.disable(gl.BLEND);}};
   // 1) scene(s) + transition mask
   render(T_a,passU(TL.A,TL.p));let src=T_a;
   if(TL.B){render(T_b,passU(TL.B,0));draw(P.mix,T_m,W,H,{A:T_a,B:T_b},{RES:[W,H],P:TL.p,TM:t,TY:TL.ty});src=T_m;}
@@ -654,7 +670,7 @@ function renderAt(t,now){
   // 3) feedback trails (temporal accumulation for the fractal)
   const prev=T_trail[cur];cur^=1;const mixc=(a,b)=>TL.B?a*(1-TL.p)+b*TL.p:a;
   const trail=mixc(S.trail,TL.B?TL.B.cfg.trail:0)*(SAFE_MODE?.9:1)*(1-.25*drop),zoom=mixc(S.zoom,TL.B?TL.B.cfg.zoom:0)*(1+sE+build);
-  draw(P.feed,T_trail[cur],W,H,{S:T_d,P:prev},{RES:[W,H],DECAY:TL.B&&TL.ty===1?Math.max(trail,.6):trail,ZOOM:zoom,ROT:TL.A.sc===3?.004:0,TA:taa?.35:0});
+  draw(P.feed,T_trail[cur],W,H,{S:T_d,P:prev},{RES:[W,H],DECAY:Math.pow(TL.B&&TL.ty===1?Math.max(trail,.6):trail,dt*30),ZOOM:zoom,ROT:TL.A.sc===3?.004:0,TA:taa?.35:0});
   // 4) bloom chain
   let bsrc=T_trail[cur];
   T_bloom.forEach((b,i)=>{draw(P.down,b,b.w,b.h,{S:bsrc},{RES:[b.w,b.h],TX:[1/bsrc.w,1/bsrc.h],TH:i==0?1.4:0});bsrc=b;});
@@ -668,7 +684,9 @@ function renderAt(t,now){
   // 6) final composite
   const pulse=kick*(SAFE_MODE?.04:BEAT_PULSE)+flash;
   const fade=Math.min(1,t/2)*Math.max(0,Math.min(1,(map.duration-t)/FADE_OUT_SECONDS));
-  draw(P.final,null,cv.width,cv.height,{S:T_trail[cur],B:T_bloom[0],X:T_txt},{RES:[cv.width,cv.height],EXPO:EXPOSURE*(1+pulse)*(1-.15*brk)*(1+.12*build),FADE:fade,GR:GRAIN,
+  if(HDR){draw(P.lum,T_lum,32,18,{S:T_trail[cur]},{RES:[32,18]});const pa=T_ae[aeI];aeI^=1;
+    draw(P.adapt,T_ae[aeI],1,1,{S:T_lum,P:pa},{K:aeFirst?1:1-Math.exp(-dt*2.5)});aeFirst=false;}
+  draw(P.final,null,cv.width,cv.height,{S:T_trail[cur],B:T_bloom[0],X:T_txt,AE:T_ae[aeI]},{AEON:HDR?1:0,RES:[cv.width,cv.height],EXPO:EXPOSURE*(1+pulse)*(1-.15*brk)*(1+.12*build),FADE:fade,GR:GRAIN,
     CA:CHROMA*Math.min(3,1+1.2*kick+1.2*snare*(1-brk)+build+1.5*drop),BK:BLOOM_STRENGTH*(1+.5*build+.5*drop),TM:t%100,SAT:1.25-.3*brk+.1*drop,XA:xa});
   const dk=r=>Math.exp(-dt*r);kick*=dk(9);flash*=dk(7.5);snare*=dk(14);hat*=dk(20);snap*=dk(7);
   fpsN++;if(now-fpsT>500){fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now;
