@@ -37,8 +37,39 @@ for c in np.argsort(-nov):
     if len(secs)>=7: break
 # snap sections to nearest bar (4 beats)
 bar=4*step; secs=sorted(round(t0+round((s-t0)/bar)*bar,3) for s in secs)
+# ---- music structure: breakdowns (bass drops out), drops (bass returns, snapped to downbeat), builds ----
+st=0.25; Bs=np.convolve(env(bass,st),np.ones(8)/8,'same'); Es=np.convolve(env(S.sum(1),st),np.ones(16)/16,'same')
+low=Bs<0.18; breaks=[]; i=0
+while i<len(low):
+    if low[i]:
+        j=i
+        while j<len(low) and low[j]: j+=1
+        if (j-i)*st>=4: breaks.append([round(i*st,2),round(j*st,2)])
+        i=j
+    else: i+=1
+mb=[]
+for b in breaks:
+    if mb and b[0]-mb[-1][1]<3: mb[-1][1]=b[1]
+    else: mb.append(list(b))
+breaks=mb
+downbeats=beats[::4]; drops=[]
+for b0,b1 in breaks:
+    k=int(b1/st)
+    while k<len(Bs) and Bs[k]<0.45: k+=1
+    if k<len(Bs):
+        t=k*st; db=downbeats[np.argmin(np.abs(downbeats-t))]; drops.append(round(float(db),3))
+drops=sorted(set(drops)); breaks=[b for b in breaks if any(d>b[1] for d in drops)]
+builds=[[round(max(b0,d-16*step),2),d] for (b0,b1) in breaks for d in [min(x for x in drops if x>=b1)]]
+inten=np.clip(0.55*Es/np.percentile(Es,98)+0.45*Bs/np.percentile(Bs,98),0,1)
+# secondary accents: snare-ish (mid-band flux) and hat-ish (high-band flux) peaks
+def bandflux(a,b):
+    m=(f>=a)&(f<b); v=np.r_[0,np.maximum(0,np.diff(L[:,m],axis=0)).sum(1)]; v-=np.convolve(v,np.ones(171)/171,'same')
+    k=12; th=v.mean()+2.5*v.std(); return [round(i/fps,3) for i in range(k,nf-k,2) if v[i]==v[i-k:i+k].max() and v[i]>th]
+snares=bandflux(180,1800); hats=bandflux(4000,5500)
+print('breaks',breaks); print('drops',drops); print('snares',len(snares),'hats',len(hats))
 r=lambda a:[round(float(v),3) for v in np.clip(a,0,1.5)]
 json.dump(dict(duration=round(dur,3),bpm=round(float(bpm),3),beats=[round(float(b),3) for b in beats],
   onsets=[round(i/fps,3) for i in on_],sections=[0]+secs,envStep=0.25,
-  energy=r(env(S.sum(1))),bass=r(env(bass)),mid=r(env(mid)),high=r(env(high))),open('beats.json','w'))
+  energy=r(env(S.sum(1))),bass=r(env(bass)),mid=r(env(mid)),high=r(env(high)),
+  intensity=r(inten),breaks=breaks,drops=drops,builds=builds,snares=snares,hats=hats),open('beats.json','w'))
 print(f'dur {dur:.1f}s beats {len(beats)} onsets {len(on_)} sections {[0]+secs}')
