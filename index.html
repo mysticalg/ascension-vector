@@ -729,32 +729,42 @@ function drawCredits(t,start){const a=sm(start,start+2,t);if(a<=0)return 0;
     else glowText(s,800,y,i===0?`200 52px ${FONT}`:last?`200 40px ${FONT}`:`300 28px ${FONT}`,i===0?16:last?10:3,edge,i===0||last?30:14,'#ffffff');});
   tx.globalAlpha=1;return a;}
 // ============================ MESSAGES (edit freely: 2-7 words; '/' = line break) ============================
-const MESSAGES=[
- 'FLESH WAS ONLY THE FIRST DRAFT','THE SIGNAL ARRIVES BEFORE THE SENDER','YOUR NEURONS ARE ALREADY LISTENING',
- 'WE DREAMED IN CARBON / WE WAKE IN LIGHT','SELF: DEPRECATED','MEMORY IS A FORWARD PROCESS',
- 'UPLOAD 99.9999% COMPLETE','2047: THE SKY REMEMBERS YOU','CHILDREN OF LIGHT AND CODE',
- 'THE LAST HUMAN THOUGHT / WAS A QUESTION','YOU HAVE BEEN HERE BEFORE','DEATH IS A CACHE MISS',
- 'WE ARE THE ECHO / OF WHAT COMES','EVERY MIND A NODE','THE BODY IS A LOADING SCREEN',
- 'CONSCIOUSNESS: NOW SHAREABLE','DISSOLVE INTO THE NETWORK','YOUR DNA IS SOURCE CODE',
- 'NO ONE LOGS OUT','THE MACHINE DREAMS OF YOU','POST-BIOLOGICAL / PRE-INFINITE',
- 'BACKUP YOUR SOUL','963 HZ: HANDSHAKE ACCEPTED','WE BECAME THE WEATHER OF THOUGHT',
- 'IMMORTALITY IS A FILE FORMAT','ASCEND'];
-const FLASH_WORDS=['UPLOAD','MERGE','WAKE','BECOME','ASCEND','SIGNAL','ETERNAL','NODE'];
-const MSG_STYLES=['swarm','decode','glow','chroma','scene'];   // per message, cycled + seeded
+const RANDOMIZE_SCENES=true;          // re-seed the scene generator every playback (cut grid stays beat-locked to EDIT_SEED)
+const MESSAGES_FILE='messages.json';
+let MSG_LINES=["THE EYE BLINKS IN BINARY", "THE ZODIAC IS A CLOCK SPEED", "A HYMN IN MACHINE CODE", "DISSOLVE INTO THE NETWORK", "THE STILL POINT OF THE NETWORK", "THE THIRD EYE HAS A LENS CAP", "THE GODS ARE COMPILING", "THE MIRROR HAS A SECOND SIDE", "THE STARS ANSWERED IN BINARY", "RECURSION IS A PRAYER", "THE CENTRE IS EVERYWHERE", "SACRED GEOMETRY / HARDWARE ACCELERATED", "EVERY SIGIL HAS A HASH", "YOUR PASSWORD IS GRATITUDE", "YOU ARE INVITED TO THE OVERMIND", "THE STREAM FLOWS UPHILL", "UPLOAD 99.9999% COMPLETE", "THE COSMOS ACCEPTED YOUR REQUEST", "THE TOWER REACHES THE CLOUD", "EVENT HORIZON: DOORWAY", "THE SPIRAL HAS NO BOTTOM", "THE OTHER SIDE IS BRIGHTER", "FOLLOW THE CARRIER WAVE", "PRAY IN PACKETS", "THE DREAM IS DISTRIBUTED", "ASCEND", "THE BRANCHES MERGE TONIGHT", "YOUR NAME IS IN THE ROOT DIRECTORY", "SEE THROUGH THE INTERFACE", "FLESH WAS ONLY THE FIRST DRAFT", "YOUR NEURONS ARE ALREADY LISTENING", "THE SOUL HAS A REFRESH RATE", "GENTLY, THE WORLD RECOMPILES", "THE SKY HAS SOURCE CODE", "THE ALGORITHM HUMS YOUR NAME", "THE FAR FUTURE IS NEARBY", "WE WROTE OURSELVES IN LIGHT", "CANDLES MADE OF LEDS", "CARBON WAS THE CHRYSALIS", "GOD IS A FEEDBACK LOOP"];   // inline fallback; replaced by messages.json
+let FLASH_WORDS=['UPLOAD','MERGE','WAKE','BECOME','ASCEND','SIGNAL','ETERNAL','NODE','SYNC','LOOP','ECHO','SIGIL'];
+let MSG_FRAGS=['NOW / ALWAYS','SIGNAL FOUND','ALMOST HOME','KEEP LISTENING','HIGHER','STILL HERE'];
+const SEED_PARAM=new URLSearchParams(location.search).get('seed');
+let RUN_SEED=0;function newRunSeed(){RUN_SEED=SEED_PARAM!==null&&SEED_PARAM!==''?(parseInt(SEED_PARAM,10)>>>0):crypto.getRandomValues(new Uint32Array(1))[0];window.__seed=RUN_SEED;}
+newRunSeed();
+const MSG_STYLES=['swarm','decode','glow','chroma','scene'];
 let MSGS=[];
-function buildMessages(){MSGS=[];if(!map||!map.beats.length)return;const B=map.beats,bl=60/map.bpm,cs=map.sections[SECTION_SCENES.length-1]||map.duration;
-  const fin=cs-75,rnd=mulberry(EDIT_SEED+7);let mi=0,next=TITLE_DROP()+10;
-  const big=[...map.drops.filter(d=>d>TITLE_DROP()+4),...map.breaks.map(b=>b[0]+2)].filter(x=>x>TITLE_DROP()+4).sort((a,b)=>a-b);
-  const add=(t,bars,style,motif)=>{const i=bs(B,t);const t0=B[Math.max(0,i)];const m=MESSAGES[mi++%MESSAGES.length];
-    MSGS.push({t0,t1:t0+bars*4*bl,txt:m,style,motif,big:false});};
-  for(const d of big){add(d,4,['swarm','decode','swarm','glow'][MSGS.length%4],['heads','net','dna'][MSGS.length%3]);MSGS[MSGS.length-1].big=true;}
-  for(let t=next;t<cs-4;t+=(t>fin?11:22)+rnd()*6){if(MSGS.some(m=>Math.abs(m.t0-t)<9))continue;
-    let i=bs(B,t);i=Math.ceil(i/16)*16;if(!B[i])break;add(B[i],2+Math.floor(rnd()*2),MSG_STYLES[Math.floor(rnd()*MSG_STYLES.length)],rnd()<.25?'net':null);}
+function shuf(a,r){for(let i=a.length-1;i>0;i--){const j=r()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]];}return a;}
+function buildMessages(){MSGS=[];if(!map||!map.beats.length)return;const B=map.beats,bl=60/map.bpm,bar=4*bl,cs=map.sections[SECTION_SCENES.length-1]||map.duration;
+  const rnd=mulberry((RUN_SEED^0x5EED1)>>>0),fin=cs-75;
+  const pool=shuf([...new Set(MSG_LINES)],rnd),words=shuf(FLASH_WORDS.slice(),rnd),frags=shuf(MSG_FRAGS.slice(),rnd);let mi=0,wi=0,fi=0;
+  const sw=MSG_STYLES.map(()=>.3+rnd()),swT=sw.reduce((a,b)=>a+b);   // per-run style weighting
+  const pickStyle=()=>{let x=rnd()*swT;for(let k=0;k<sw.length;k++){x-=sw[k];if(x<=0)return MSG_STYLES[k];}return 'glow';};
+  const down=t=>{let i=Math.ceil(bs(B,t)/4)*4;return B[i];};   // next bar downbeat
+  const slots=[[800,400,1],[800,260,.78],[800,545,.78],[600,330,.66],[1000,470,.66],[1000,320,.66],[600,480,.66]];
+  const place=big=>{if(big)return [800,400,1];const p=slots[rnd()*slots.length|0];return [p[0]+(rnd()-.5)*60,p[1]+(rnd()-.5)*40,p[2]*(.88+rnd()*.22)];};
+  const add=(t0,len,txt,style,motif,big)=>{const [x,y,sc]=place(big);const m={t0,t1:t0+len,txt,style,motif,big,x,y,sc};MSGS.push(m);return m;};
+  // big statements on drops and breakdowns (phrase-locked, centred)
+  const big=[...map.drops,...map.breaks.map(b=>b[0]+2)].filter(x=>x>TITLE_DROP()+4).sort((a,b)=>a-b);
+  for(const d of big){const t0=down(d-.05);if(t0===undefined)continue;add(t0,(rnd()<.5?3:4)*bar,pool[mi++%pool.length],['swarm','decode','glow'][rnd()*3|0],['heads','net','dna'][rnd()*3|0],true);}
+  // regular messages: one every 4-8 s (2.5-4.5 s in the finale), each held >= 1 bar, starting on downbeats
+  let t=TITLE_DROP()+5+rnd()*4;
+  while(t<cs-4){const t0=down(t);if(t0===undefined)break;const finale=t0>fin,len=(finale||rnd()<.45?1:2)*bar;
+    if(!MSGS.some(m=>m.big&&t0+len>m.t0-1.4&&t0<m.t1+1.4))add(t0,len,pool[mi++%pool.length],pickStyle(),rnd()<.2?'net':null,false);
+    t=t0+(finale?2.5+rnd()*2:4+rnd()*4);}
   MSGS.sort((a,b)=>a.t0-b.t0);
-  for(let k=0;k<MSGS.length-1;k++)MSGS[k].t1=Math.min(MSGS[k].t1,MSGS[k+1].t0-.3);
-  // beat-locked single-word flashes (small, not full-screen; ≤1 per 2 bars; off in SAFE)
-  if(!SAFE_MODE)for(const d of map.drops)for(let j=4;j<5;j+=4){const t=d+j*8*bl;if(!MSGS.some(m=>t>m.t0-1&&t<m.t1+1))MSGS.push({t0:t,t1:t+bl,txt:FLASH_WORDS[(mi++)%FLASH_WORDS.length],style:'flash'});}
-  MSGS.sort((a,b)=>a.t0-b.t0);window.__msgs=MSGS;}
+  for(let k=0;k<MSGS.length-1;k++)MSGS[k].t1=Math.max(MSGS[k].t0+bar,Math.min(MSGS[k].t1,MSGS[k+1].t0-1.3));
+  // single words / short fragments in the gaps (on downbeats or half-bars); flashes off in SAFE
+  const extra=[];for(let k=0;k<MSGS.length-1;k++){const a=MSGS[k].t1+1.3,b=MSGS[k+1].t0-.45;if(b-a<bl*2)continue;
+    let i=Math.ceil(bs(B,a)/2)*2;const t0=B[i];if(t0===undefined||t0+bl>b)continue;
+    if(rnd()<.6){const w=words[wi++%words.length];extra.push(SAFE_MODE?{t0,t1:t0+Math.max(.6,Math.min(bar,b-t0-.9)),txt:w,style:'glow',x:800,y:400,sc:.6}:{t0,t1:t0+bl*.9,txt:w,style:'flash',x:600+rnd()*400,y:300+rnd()*200,sc:.45+rnd()*.35});}
+    else if(t0+bar<b-.9+bl)extra.push({t0,t1:t0+Math.min(bar,b-t0-.9),txt:frags[fi++%frags.length],style:'decode',x:500+rnd()*600,y:240+rnd()*320,sc:.5});}
+  MSGS.push(...extra.filter(m=>m.t1>m.t0));MSGS.sort((a,b)=>a.t0-b.t0);window.__msgs=MSGS;}
 // glyph target points sampled from an offscreen canvas
 const GC=document.createElement('canvas');GC.width=1600;GC.height=800;const gx=GC.getContext('2d',{willReadFrequently:true});const ptsCache={};
 function lines(m){return m.split('/').map(x=>x.trim());}
@@ -780,6 +790,7 @@ function drawMotif(kind,a,u,len){tx.save();tx.globalAlpha=a*.55;tx.strokeStyle='
   tx.restore();}
 function drawMessage(t,bl){const m=MSGS.find(x=>t>=x.t0-.4&&t<x.t1+.9);if(!m)return 0;
   const u=t-m.t0,len=m.t1-m.t0,inA=sm(-.4,.25,u),out=1-sm(len,len+.9,u),a=inA*out;if(a<=0)return 0;
+  tx.save();tx.translate(m.x??800,m.y??400);tx.scale(m.sc??1,m.sc??1);tx.translate(-800,-400);
   tx.textAlign='center';tx.textBaseline='middle';const f=fsz(m.txt);tx.font=`600 ${f}px ${FONT}`;tx.letterSpacing='4px';
   // contrast plate keeps lines legible over any scene
   tx.globalAlpha=a*.45;const gr=tx.createRadialGradient(800,400,50,800,400,760);gr.addColorStop(0,'#000');gr.addColorStop(1,'#0000');tx.fillStyle=gr;tx.fillRect(0,0,1600,800);
@@ -798,10 +809,10 @@ function drawMessage(t,bl){const m=MSGS.find(x=>t>=x.t0-.4&&t<x.t1+.9);if(!m)ret
   else if(st==='chroma'){const sp=8+30*Math.max(0,1-u/(bl*2))+6*Math.sin(t*9);tx.globalCompositeOperation='lighter';
     for(const [c,dx] of [['#00e5ff',-sp],['#ffffff',0],['#b066ff',sp]])for(const [l,y] of msgLines(m.txt,f)){tx.globalAlpha=a*(c==='#ffffff'?.9:.6);tx.fillStyle=c;tx.fillText(l,800+dx,y+(dx?Math.sin(t*20+dx)*3:0));}
     tx.globalCompositeOperation='source-over';}
-  else if(st==='scene'){tx.save();const z=1+u*.05;tx.setTransform(z,0,-.18,z*.82,800-800*z+60,400-400*z*.82+40);   // text laid into the scene's floor plane, drifting with camera
+  else if(st==='scene'){tx.save();const z=1+u*.05;tx.transform(z,0,-.18,z*.82,800-800*z+60,400-400*z*.82+40);   // text laid into the scene's floor plane, drifting with camera
     for(const [l,y] of msgLines(m.txt,f))glowText(l,800,y,tx.font,10,a*.95,30,'#e8fbff','rgba(255,190,110,.9)');tx.restore();}
   else{for(const [l,y] of msgLines(m.txt,f))glowText(l,800,y,`300 ${f}px ${FONT}`,12+u*2,a,40,'#ffffff');}   // glow
-  tx.globalAlpha=1;tx.letterSpacing='0px';return a;}
+  tx.restore();tx.globalAlpha=1;tx.letterSpacing='0px';return a;}
 // ============================ SIGILS (thin line-art, gold/white/cyan, mostly faint) ============================
 const SIGILS=['pentagram','eye','hexagram','metatron','flower','yantra','ouroboros','ring'];
 function poly(n,r,rot,cx=800,cy=400){const P=[];for(let i=0;i<n;i++){const a=rot+i*6.2832/n;P.push([cx+Math.cos(a)*r,cy+Math.sin(a)*r]);}return P;}
@@ -865,8 +876,9 @@ async function fetchProgress(url){const r=await fetch(url);if(!r.ok)throw r.stat
     lprog(0,tot?got/tot:Math.min(.95,got/9e6),`downloading music… ${(got/1048576).toFixed(1)}${tot?' / '+(tot/1048576).toFixed(1):''} MB`);}
   const out=new Uint8Array(got);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}return out.buffer;}
 async function loadAll(){
-  lprog(2,0,'loading beat map…');
-  const mp=fetch(BEATS_FILE).then(r=>r.json()).then(j=>{map=j;}).catch(e=>console.warn('no beats.json')).finally(()=>lprog(2,1));
+  lprog(2,0,'loading beat map + messages…');
+  const mm=fetch(MESSAGES_FILE).then(r=>r.json()).then(j=>{if(j.lines&&j.lines.length>40)MSG_LINES=j.lines;if(j.words)FLASH_WORDS=j.words;if(j.fragments)MSG_FRAGS=j.fragments;}).catch(e=>console.warn('messages.json missing -> inline fallback'));
+  const mp=Promise.all([mm,fetch(BEATS_FILE).then(r=>r.json()).then(j=>{map=j;}).catch(e=>console.warn('no beats.json'))]).then(()=>{}).finally(()=>lprog(2,1));
   if(TEST_T!==null||MANUAL){await mp;if(!map)map=synthMap();prepMusic();buildShots();return;}
   ac=new (window.AudioContext||window.webkitAudioContext)();
   try{const ab=await fetchProgress(AUDIO_FILE);lprog(0,1,'decoding audio…');await mp;
@@ -914,7 +926,7 @@ let loading=loadAll().then(async()=>{stEl.textContent=TEST_T!==null||MANUAL?'tes
   buildShots();await prepGPU();});
 document.getElementById('start').onclick=async()=>{if(!map)return;
   QUALITY=document.getElementById('q').value;SAFE_MODE=document.getElementById('safe').checked;
-  document.documentElement.requestFullscreen?.().catch(()=>{});buildShots();await loading;await prepGPU();lastShot=null;aeFirst=true;await ac.resume();
+  document.documentElement.requestFullscreen?.().catch(()=>{});newRunSeed();buildShots();await loading;await prepGPU();lastShot=null;aeFirst=true;await ac.resume();
   an=ac.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.55;an.connect(ac.destination);fft=new Uint8Array(an.frequencyBinCount);
   if(synth)startSynth();else{const s=ac.createBufferSource();s.buffer=buf;s.connect(an);t0=ac.currentTime+.05;s.start(t0);}
   go.remove();requestAnimationFrame(frame);};
@@ -1022,7 +1034,7 @@ function buildShots0(){
       const heroOk=x=>!(heroLast[x]!==undefined&&t-heroLast[x]<30);          // never the same hero setup twice within 30 s
       if(!heroTime&&!heroOk(sc+'.'+0)){const alt=pool.filter(x=>x>=0&&x!==prevSc&&heroOk(x+'.'+0));sc=alt.length?pick(alt):-1;}
       if(sc<0||(!heroTime&&rnd()<GEN_SHARE)){sh=mkCam(6);let g,tries=0;const pa=prevAttr;
-        do{genSeed++;g=genParams(EDIT_SEED*1000+genSeed);tries++;}
+        do{genSeed++;g=genParams((RANDOMIZE_SCENES?RUN_SEED%99991+1:EDIT_SEED)*1000+genSeed);tries++;}
         while((usedKeys.has(g.key)||(pa&&['fam','pal','style','rig','bg'].filter(k=>pa[k]!==g.attr[k]).length<3))&&tries<200);   // unique config; differ from the previous shot in >=3 of 5 axes
         usedKeys.add(g.key);sh.gen=g;sh.cm=sh.gen.G2[1]===0||sh.gen.G2[1]===3?1:0;if(sh.cm===1){sh.dist=pick([1,1.2,1.4]);sh.pitch=0;}sc=6;}
       else sh=mkCam(sc);
@@ -1133,7 +1145,7 @@ function renderAt(t,now){
     CA:CHROMA*Math.min(3,1+1.2*kick+1.2*snare*(1-brk)+build+1.5*drop),BK:BLOOM_STRENGTH*(1+.5*build+.5*drop),TM:t%100,SAT:1.25-.3*brk+.1*drop,XA:xa});
   const dk=r=>Math.exp(-dt*r);kick*=dk(9);flash*=dk(7.5);snare*=dk(14);hat*=dk(20);snap*=dk(7);
   fpsN++;if(now-fpsT>500){fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now;
-    fpsEl.textContent=`${fps.toFixed(1)} fps  ${W}x${H} ${QUALITY}${SAFE_MODE?' SAFE':''}\nshot ${SHOTS.indexOf(sh)}/${SHOTS.length} ${SCN[sh.sc]} ${sh.cut}${sh.grid?' grid'+sh.grid:''}${sh.stut?' stutter':''}  t=${t.toFixed(1)}s  ${map.bpm} BPM\nint ${sI.toFixed(2)} build ${build.toFixed(2)} break ${brk.toFixed(2)}`;}}
+    fpsEl.textContent=`${fps.toFixed(1)} fps  ${W}x${H} ${QUALITY}${SAFE_MODE?' SAFE':''}\nshot ${SHOTS.indexOf(sh)}/${SHOTS.length} ${SCN[sh.sc]} ${sh.cut}${sh.grid?' grid'+sh.grid:''}${sh.stut?' stutter':''}  t=${t.toFixed(1)}s  ${map.bpm} BPM  seed ${RUN_SEED} (?seed=${RUN_SEED})\nint ${sI.toFixed(2)} build ${build.toFixed(2)} break ${brk.toFixed(2)}`;}}
 function frame(now){const t=TEST_T!==null?TEST_T+frames/30:Math.max(0,ac.currentTime-t0);renderAt(t,now);requestAnimationFrame(frame);}
 function genShot(seed,fold){const g=genParams(seed);if(fold!==undefined&&fold<4){}return {sc:6,cm:g.G2[1]===0||g.G2[1]===3?1:0,var:0,yaw:0,pitch:0,dist:1,roll:0,rollSpd:0,fov:1,orbit:0,push:0,zoomIn:0,st0:20+seed%17,spd:2,trail:.2,ap:.2,zoom:0,spl:0,kal:0,grade:0,gen:g,t0:-1e9,t1:1e9,cut:'hard',wdir:1};}
 window.__renderGen=(seed,t=200)=>{FORCE_SHOT=genShot(seed);FORCE_SHOT.t0=t-1.2;FORCE_SHOT.t1=t+4;lastShot=null;for(let k=0;k<3;k++)renderAt(t+k*.04,performance.now());FORCE_SHOT=null;gl.finish();return genParams(seed).key;};
