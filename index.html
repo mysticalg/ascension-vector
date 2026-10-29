@@ -1,14 +1,16 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>ASCENSION VECTOR — 963 Hz</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><title>ASCENSION VECTOR — 963 Hz</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:monospace}
-canvas{display:block;width:100vw;height:100vh}
+canvas{display:block;width:100vw;height:100vh;height:100dvh;touch-action:manipulation}
+body.pfs canvas{position:fixed;inset:0}
 #go{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#cfe;background:radial-gradient(#102030,#000);text-align:center}
 #go h1{margin:0;font:200 46px "Helvetica Neue","Segoe UI",Montserrat,Arial,sans-serif;letter-spacing:14px;color:#bff}
 #go .warn{max-width:640px;border:1px solid #fc6;color:#fd9;padding:12px;font-size:14px;line-height:1.5}
 #go button{font:20px monospace;padding:10px 40px;background:#0aa;color:#000;border:0;cursor:pointer}
 #go small{opacity:.6}
 @media(max-height:680px){#go{gap:6px}#go h1{font-size:30px}#go .warn{font-size:12px;padding:8px}}
+@media(max-width:640px),(orientation:portrait){#go{justify-content:flex-start;overflow-y:auto;padding:22px 16px;gap:12px;font-size:15px;font-weight:600}#go h1{font-size:28px;font-weight:400;letter-spacing:6px}#go .warn{font-size:14px;line-height:1.45;padding:10px}#go button{font-size:24px;font-weight:700;padding:18px 0;width:88%}#go small{font-size:13px;opacity:.8}#ld{font-size:14px;font-weight:600}#ld .bar{height:14px}#go select{font-size:16px}}
 #go button:disabled{background:#244;color:#577;cursor:wait}
 #ld{width:min(560px,86vw);text-align:left;font-size:13px;color:#9cd}
 #ld .bar{height:10px;border:1px solid #2a6a7a;background:#031018;position:relative;overflow:hidden;margin:6px 0}
@@ -27,12 +29,12 @@ canvas{display:block;width:100vw;height:100vh}
  <div class="warn">⚠ PHOTOSENSITIVITY WARNING<br>This demo contains fast motion, pulsing light, intense saturated colour and rapid scene transitions.
  A small percentage of people may experience seizures when exposed to such content. If you or anyone watching has epilepsy, do not watch, or enable SAFE MODE.
  Stop immediately if you feel dizzy, disoriented or unwell.</div>
- <div><label>Quality <select id="q"><option>low</option><option selected>medium</option><option>high</option><option>ultra</option></select></label>
+ <div><label>Quality <select id="q"><option>low</option><option selected>medium</option><option>high</option><option>ultra</option><option>mobile</option></select></label>
  &nbsp; <label><input type="checkbox" id="safe"> SAFE MODE (gentler pulses, no flashes or snap-zooms, slower finale)</label></div>
  <div class="ring" id="ring"></div>
  <div id="ld"><div class="row"><span id="ldStage">starting…</span><span id="ldPct">0%</span></div><div class="bar"><div class="fill" id="ldFill"></div></div>
  <ol><li id="s0">music.ogg download</li><li id="s1">audio decode</li><li id="s2">beat map (beats.json)</li><li id="s3">shader compile &amp; link</li><li id="s4">GPU warm-up</li></ol></div>
- <button id="start" disabled>▶ START</button><small id="st">loading…</small><small>F = FPS counter · ESC = exit fullscreen · best with headphones, fullscreen, lights off</small>
+ <button id="start" disabled>▶ START</button><small id="st">loading…</small><small>F or double-tap = FPS counter · ESC = exit fullscreen · best with headphones, fullscreen, lights off</small>
 </div>
 <script>
 // ============================ TWEAKABLES ============================
@@ -45,6 +47,7 @@ const QUALITY_PRESETS = {           // scale = render res, steps = raymarch step
   low:    {scale:.45, steps:72,  bloom:3, particles:60000,  dof:12, dpr:1,   ql:0},
   medium: {scale:.65, steps:110, bloom:4, particles:150000, dof:20, dpr:1,   ql:1},
   high:   {scale:.85, steps:160, bloom:5, particles:300000, dof:28, dpr:1.5, ql:2},
+  mobile: {scale:.5,  steps:70,  bloom:3, particles:40000,  dof:8,  dpr:2,   ql:0},   // auto-selected on phones/tablets
   ultra:  {scale:1.0, steps:240, bloom:6, particles:600000, dof:40, dpr:2,   ql:3},
 };
 // One entry per detected section (beats.json "sections").  sc: 0 galaxy, 1 gas giant, 2 tunnel, 3 geometry,
@@ -84,7 +87,8 @@ const CREDITS = ['ASCENSION VECTOR','','*music','Ascension Vector 963 Hz','','*c
 // ===================================================================
 
 const Q=new URLSearchParams(location.search), TEST_T=Q.has('t')?parseFloat(Q.get('t')):null, MANUAL=Q.get('manual')==='1';
-if(Q.get('q'))QUALITY=Q.get('q'); if(Q.get('cuts'))CUT_DENSITY=Math.max(.2,parseFloat(Q.get('cuts'))||1); if(Q.get('safe')==='1')SAFE_MODE=true;
+const IS_MOBILE=matchMedia('(pointer:coarse)').matches||/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+if(IS_MOBILE)QUALITY='mobile';if(Q.get('q'))QUALITY=Q.get('q'); if(Q.get('cuts'))CUT_DENSITY=Math.max(.2,parseFloat(Q.get('cuts'))||1); if(Q.get('safe')==='1')SAFE_MODE=true;
 document.getElementById('q').value=QUALITY; document.getElementById('safe').checked=SAFE_MODE;
 const cv=document.getElementById('c'), stEl=document.getElementById('st'), go=document.getElementById('go'), fpsEl=document.getElementById('fps');
 const gl=cv.getContext('webgl2',{antialias:false,alpha:false,preserveDrawingBuffer:MANUAL});
@@ -416,7 +420,7 @@ vec3 sceneEyes(vec3 ro,vec3 rd){
  return mix(bg,col,exp(-t*.12));}
 
 void main(){
- UV=(gl_FragCoord.xy-OFS+JIT-.5*R)/R.y;
+ UV=(gl_FragCoord.xy-OFS+JIT-.5*R)/min(R.y,R.x);
  vec3 ro,ta;float roll;cam(ro,ta,roll);
  vec3 f=normalize(ta-ro),up=vec3(sin(roll),cos(roll),0.),r=normalize(cross(up,f)),u=cross(f,r);
  vec3 rd=normalize(f*FL()+UV.x*r+UV.y*u);
@@ -519,7 +523,7 @@ void gcam(out vec3 ro,out vec3 ta,out float roll){int r=int(G2.y);float s=ST;rol
  if(CM==0){vec3 v=ro-ta;v.xz=rot(CV.x)*v.xz;float l=length(v);float el=clamp(asin(clamp(v.y/l,-1.,1.))+CV.y,-1.4,1.4);vec2 hz=normalize(v.xz+1e-5);v=vec3(hz.x*cos(el),sin(el),hz.y*cos(el))*l*CV.z;ro=ta+v;}
  else{vec3 f=ta-ro;f.xz=rot(CV.x*.4)*f.xz;ro+=normalize(f)*(CV.z-1.)*1.5;ta=ro+f;}
  roll+=CV.w;}
-void main(){vec2 uv=(gl_FragCoord.xy-OFS+JIT-.5*R)/R.y;int ST_=int(G4.x),PM=int(G4.z);
+void main(){vec2 uv=(gl_FragCoord.xy-OFS+JIT-.5*R)/min(R.y,R.x);int ST_=int(G4.x),PM=int(G4.z);
  if(G4.y>0.){vec3 c=fx2d(int(G4.y),uv*rot(CV.w)/(FL()*.62),ST*.5);float lc=dot(c,vec3(.33));c=palMode(PM,styleIt(ST_,c,gl_FragCoord.xy,smoothstep(.02,.0,abs(fract(lc*6.)-.5)-.45),lc));O=vec4(clamp(c,0.,6.),1);return;}
  vec3 ro,ta;float roll;gcam(ro,ta,roll);
  vec3 f=normalize(ta-ro),up=vec3(sin(roll),cos(roll),0.),r=normalize(cross(up,f)),u=cross(f,r);vec3 rd=normalize(f*FL()+uv.x*r+uv.y*u);
@@ -556,7 +560,7 @@ void main(){uint id=uint(gl_VertexID);
  vec3 f=normalize(ta-ro),up=vec3(sin(roll),cos(roll),0.),rr=normalize(cross(up,f)),u=cross(f,rr);
  vec3 v=p-ro;float z=dot(v,f);
  vec2 s=vec2(dot(v,rr),dot(v,u))/z*FL();
- gl_Position=z>.2?vec4(s.x*2.*R.y/R.x,s.y*2.,0,1):vec4(9,9,9,1);
+ gl_Position=z>.2?vec4(s.x*2.*min(R.y,R.x)/R.x,s.y*2.*min(R.y,R.x)/R.y,0,1):vec4(9,9,9,1);
  gl_PointSize=clamp(R.y*.016*(.5+a4*1.5)/z,1.,10.);
  vec3 c=mix(vec3(1.,.8,.5),mix(vec3(.3,.6,1.),vec3(1.,.3,.8),a4),smoothstep(1.,5.,r));
  if(VAR==2)c=c.zxy;
@@ -638,7 +642,7 @@ void main(){float a=0.;for(int y=0;y<18;y++)for(int x=0;x<32;x++)a+=texelFetch(S
  float l=exp(a/576.),pv=texelFetch(P,ivec2(0),0).r;O=vec4(pv<=0.?l:mix(pv,l,K),0,0,1);}`;
 // final: chromatic aberration, bloom, ACES, vignette, gamma, grain, typography overlay, fade
 const FS_FINAL=`#version 300 es
-precision highp float;uniform sampler2D S,B,X,AE;uniform vec2 RES;uniform int GRD;uniform float AEON,EXPO,FADE,GR,CA,BK,TM,SAT,XA;out vec4 O;
+precision highp float;uniform sampler2D S,B,X,AE;uniform vec2 RES;uniform int GRD;uniform float AEON,EXPO,FADE,GR,CA,BK,TM,SAT,XA,TXK;out vec4 O;
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 void main(){vec2 uv=gl_FragCoord.xy/RES,d=uv-.5;float k=CA*dot(d,d)*4.;
  vec3 c=vec3(texture(S,uv-d*k).r,texture(S,uv).g,texture(S,uv+d*k).b);
@@ -648,7 +652,7 @@ void main(){vec2 uv=gl_FragCoord.xy/RES,d=uv-.5;float k=CA*dot(d,d)*4.;
  if(GRD>0){float l=dot(c,vec3(.2126,.7152,.0722));vec3 g=GRD==1?mix(vec3(.12,.42,.62),vec3(1.25,.78,.4),smoothstep(0.,1.2,l))*l*1.6:GRD==2?l*vec3(.55,.85,1.3):l*vec3(1.25,.95,.55);c=mix(c,g,.65);}  // shot grades (no reds)
  c=aces(c);c*=1.-.65*smoothstep(.25,.85,length(d*vec2(RES.x/RES.y,1.)*.85));
  c=pow(c,vec3(1./2.2));c=mix(c,c*c*(3.-2.*c),.3);c=max(c-.012,0.)*1.012;   // contrast + deep blacks
- if(XA>0.){vec2 p=d*vec2(RES.x/RES.y,1.);vec4 tx=texture(X,vec2(p.x*.5+.5,p.y+.5))*XA;c=c*(1.-tx.a*.8)+tx.rgb;}
+ if(XA>0.){vec2 p=d*vec2(RES.x/RES.y,1.)*TXK;if(abs(p.y)<.5){vec4 tx=texture(X,vec2(p.x*.5+.5,p.y+.5))*XA*(TXK>1.?smoothstep(.5,.4,abs(p.y)):1.);c=c*(1.-tx.a*.8)+tx.rgb;}}
  c+=(fract(sin(dot(gl_FragCoord.xy+TM*61.,vec2(12.9898,78.233)))*43758.5453)-.5)*GR;
  O=vec4(c*FADE,1);}`;
 
@@ -692,7 +696,7 @@ function setup(){Qp=QUALITY_PRESETS[QUALITY]||QUALITY_PRESETS.medium;
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   T_txt={t};resize();}
 function resize(){if(!Qp)return;const dpr=Math.min(devicePixelRatio||1,Qp.dpr);
-  cv.width=innerWidth*dpr|0;cv.height=innerHeight*dpr|0;W=Math.max(16,cv.width*Qp.scale|0);H=Math.max(16,cv.height*Qp.scale|0);
+  cv.width=innerWidth*dpr|0;cv.height=innerHeight*dpr|0;{const asp=cv.width/cv.height;PORT=asp<1;SMALL=Math.min(innerWidth,innerHeight)<500;TXK=asp<1.5?1.7/asp:1;}W=Math.max(16,cv.width*Qp.scale|0);H=Math.max(16,cv.height*Qp.scale|0);
   T_a=mkTex(W,H);T_b=mkTex(W,H);T_m=mkTex(W,H);T_d=mkTex(W,H);T_trail=[mkTex(W,H),mkTex(W,H)];T_bloom=[];let w=W,h=H;
   T_lum=mkTex(32,18);T_ae=[mkTex(1,1),mkTex(1,1)];aeI=0;aeFirst=true;
   for(let i=0;i<Qp.bloom;i++){w=Math.max(2,w>>1);h=Math.max(2,h>>1);T_bloom.push(mkTex(w,h));}}
@@ -705,6 +709,7 @@ function draw(prog,target,w,h,tex,uni){gl.useProgram(prog);gl.bindFramebuffer(gl
   setU(prog,uni);gl.drawArrays(gl.TRIANGLES,0,3);}
 
 // ============================ TYPOGRAPHY (canvas text -> texture, glow via shadowBlur) ============================
+let PORT=false,SMALL=false,TXK=1;   // portrait layout + text-canvas fit factor (set in resize)
 const TC=document.createElement('canvas');TC.width=1600;TC.height=800;let tx=TC.getContext('2d');
 const FONT='"Helvetica Neue","Segoe UI",Montserrat,"Inter",Arial,sans-serif';
 const sm=(a,b,x)=>{const t=Math.max(0,Math.min(1,(x-a)/(b-a)));return t*t*(3-2*t);};
@@ -716,17 +721,22 @@ function drawTitle(t,drop){const a=sm(.8,3.4,t)*(1-sm(drop+.2,drop+2.6,t));if(a<
   const burst=Math.max(0,t-drop),sp=13+t*.55+burst*burst*18;
   tx.filter=burst>0?`blur(${(burst*4).toFixed(1)}px)`:'none';
   const g=tx.createLinearGradient(300,0,1300,0);g.addColorStop(0,'#9fe8ff');g.addColorStop(.5,'#ffffff');g.addColorStop(1,'#d9b8ff');
-  glowText('ASCENSION VECTOR',800,372,`200 74px ${FONT}`,sp,a,38,g);
+  if(PORT){const sp2=Math.min(sp,40);glowText('ASCENSION',800,250,`400 128px ${FONT}`,sp2,a,38,g);glowText('VECTOR',800,400,`400 128px ${FONT}`,sp2,a,38,g);
+    const rw=480*sm(1.6,4.,t);tx.globalAlpha=a*.8;tx.fillStyle='#bfefff';tx.fillRect(800-rw,488,rw*2,4);
+    glowText('963 Hz',800,565,`600 72px ${FONT}`,16+burst*20,a*sm(2.6,4.6,t),18,'#e8f6ff');
+    glowText('a real-time raymarched journey',800,670,`600 50px ${FONT}`,3+burst*10,a*sm(4.2,6.2,t)*.9,10,'#cfe6ff');}
+  else{glowText('ASCENSION VECTOR',800,372,`200 74px ${FONT}`,sp,a,38,g);
   const rw=430*sm(1.6,4.,t);tx.globalAlpha=a*.7;tx.fillStyle='#bfefff';tx.shadowBlur=12;tx.fillRect(800-rw,442,rw*2,1.5);tx.shadowBlur=0;
   glowText('963 Hz',800,486,`300 30px ${FONT}`,16+burst*20,a*sm(2.6,4.6,t),18,'#e8f6ff');
-  glowText('a real-time raymarched journey',800,536,`300 18px ${FONT}`,7+burst*10,a*sm(4.2,6.2,t)*.75,10,'#cfe6ff');
+  glowText('a real-time raymarched journey',800,536,`300 18px ${FONT}`,7+burst*10,a*sm(4.2,6.2,t)*.75,10,'#cfe6ff');}
   tx.filter='none';tx.globalAlpha=1;return a;}
 function drawCredits(t,start){const a=sm(start,start+2,t);if(a<=0)return 0;
-  tx.clearRect(0,0,1600,800);tx.textAlign='center';tx.textBaseline='middle';const y0=860-(t-start)*92;
-  CREDITS.forEach((s,i)=>{let y=y0+i*62;const last=i===CREDITS.length-1;if(last)y=Math.max(400,y);if(y<-40||y>840||!s)return;
+  tx.clearRect(0,0,1600,800);tx.textAlign='center';tx.textBaseline='middle';const K=PORT?1.9:1,y0=860-(t-start)*92*K;
+  CREDITS.forEach((s,i)=>{let y=y0+i*62*K;const last=i===CREDITS.length-1;if(last)y=Math.max(400,y);if(y<-40||y>840||!s)return;
     const edge=last&&y<=400?1:sm(-20,140,y)*sm(820,660,y);
-    if(s[0]==='*')glowText(s.slice(1).toUpperCase(),800,y,`400 17px ${FONT}`,9,edge*.8,12,'#8fdcff');
-    else glowText(s,800,y,i===0?`200 52px ${FONT}`:last?`200 40px ${FONT}`:`300 28px ${FONT}`,i===0?16:last?10:3,edge,i===0||last?30:14,'#ffffff');});
+    const fz=(px,n)=>Math.min(px*K,1150/(n*.62+.5))|0;
+    if(s[0]==='*')glowText(s.slice(1).toUpperCase(),800,y,`${WB(400)} ${fz(17,s.length*1.3)}px ${FONT}`,PORT?4:9,edge*.8,12,'#8fdcff');
+    else glowText(s,800,y,i===0?`${WB(200)} ${fz(52,s.length)}px ${FONT}`:last?`${WB(200)} ${fz(40,s.length)}px ${FONT}`:`${WB(300)} ${fz(28,s.length)}px ${FONT}`,i===0?16:last?10:3,edge,i===0||last?30:14,'#ffffff');});
   tx.globalAlpha=1;return a;}
 // ============================ MESSAGES (edit freely: 2-7 words; '/' = line break) ============================
 const RANDOMIZE_SCENES=true;          // re-seed the scene generator every playback (cut grid stays beat-locked to EDIT_SEED)
@@ -767,13 +777,23 @@ function buildMessages(){MSGS=[];if(!map||!map.beats.length)return;const B=map.b
   MSGS.push(...extra.filter(m=>m.t1>m.t0));MSGS.sort((a,b)=>a.t0-b.t0);window.__msgs=MSGS;}
 // glyph target points sampled from an offscreen canvas
 const GC=document.createElement('canvas');GC.width=1600;GC.height=800;const gx=GC.getContext('2d',{willReadFrequently:true});const ptsCache={};
-function lines(m){return m.split('/').map(x=>x.trim());}
-function fsz(m){const L=lines(m),n=Math.max(...L.map(x=>x.length));return Math.min(96,1120/(n*.78));}   // fits the 16:9-visible 1420px of the text canvas
-function glyphPts(m){if(ptsCache[m])return ptsCache[m];gx.clearRect(0,0,1600,800);gx.fillStyle='#fff';gx.textAlign='center';gx.textBaseline='middle';
-  const f=fsz(m),L=lines(m);gx.font=`600 ${f}px ${FONT}`;L.forEach((l,i)=>gx.fillText(l,800,400+(i-(L.length-1)/2)*f*1.15));
+const LAYC={};
+function balance(w,n){let best=null;const rec=(i,k,acc)=>{if(k===1){const L=[...acc,w.slice(i).join(' ')];const m=Math.max(...L.map(x=>x.length));if(!best||m<best.m)best={m,L};return;}
+  for(let j=i+1;j<=w.length-k+1;j++)rec(j,k-1,[...acc,w.slice(i,j).join(' ')]);};rec(0,n,[]);return best.L;}
+function layout(m){const key=(PORT?'P':SMALL?'S':'L')+m;if(LAYC[key])return LAYC[key];let r;
+  if(!PORT){const L=m.split('/').map(x=>x.trim()),n=Math.max(...L.map(x=>x.length));r={L,f:SMALL?Math.min(124,1250/(n*.8)):Math.min(96,1120/(n*.78))};}
+  else{const w=m.replace(/\//g,' ').split(/\s+/).filter(Boolean);   // portrait: re-wrap into 1-4 balanced lines, as big as fits ~85% of the width
+    for(let n=1;n<=Math.min(4,w.length);n++){const L=balance(w,n),mc=Math.max(...L.map(x=>x.length));const f=Math.min(150,1150/(mc*.8+.3),740/(n*1.18));
+      if(!r||f>r.f*1.12)r={L,f};}}
+  return LAYC[key]=r;}
+function lines(m){return layout(m).L;}
+function fsz(m){return layout(m).f;}
+const WB=n=>PORT||SMALL?Math.min(800,n+200):n;   // bolder weights on small screens   // fits the 16:9-visible 1420px of the text canvas
+function glyphPts(m0){const m=m0,ck=(PORT?'P':SMALL?'S':'L')+m0;if(ptsCache[ck])return ptsCache[ck];gx.clearRect(0,0,1600,800);gx.fillStyle='#fff';gx.textAlign='center';gx.textBaseline='middle';
+  const f=fsz(m),L=lines(m);gx.font=`${WB(600)} ${f}px ${FONT}`;L.forEach((l,i)=>gx.fillText(l,800,400+(i-(L.length-1)/2)*f*1.15));
   const d=gx.getImageData(0,0,1600,800).data,P=[];const st=f>70?5:4;for(let y=0;y<800;y+=st)for(let x=0;x<1600;x+=st)if(d[(y*1600+x)*4+3]>128)P.push([x,y]);
-  const r=mulberry(m.length*97);for(let i=P.length-1;i>0;i--){const j=r()*(i+1)|0;[P[i],P[j]]=[P[j],P[i]];}return ptsCache[m]=P.slice(0,3500);}
-const GLY='01ABCDEFGHJKLMNPQRSTUVWXYZ#$%&*+<>/\\|=?';
+  const r=mulberry(m.length*97);for(let i=P.length-1;i>0;i--){const j=r()*(i+1)|0;[P[i],P[j]]=[P[j],P[i]];}return ptsCache[ck]=P.slice(0,3500);}
+const GLY='01ABCDEFGHJKLMNPQRSTUVWXYZ#$%&*+<>|=?';
 function scramble(m,k,seed){let o='';for(let i=0;i<m.length;i++){const c=m[i];o+=(c===' '||c==='/'||i/m.length<k)?c:GLY[(seed*7+i*13)%GLY.length];}return o;}
 function msgLines(txt,f,y0=400){return lines(txt).map((l,i,L)=>[l,y0+(i-(L.length-1)/2)*f*1.15]);}
 function drawMotif(kind,a,u,len){tx.save();tx.globalAlpha=a*.55;tx.strokeStyle='#8fe8ff';tx.fillStyle='#bff';tx.lineWidth=1.2;
@@ -790,10 +810,10 @@ function drawMotif(kind,a,u,len){tx.save();tx.globalAlpha=a*.55;tx.strokeStyle='
   tx.restore();}
 function drawMessage(t,bl){const m=MSGS.find(x=>t>=x.t0-.4&&t<x.t1+.9);if(!m)return 0;
   const u=t-m.t0,len=m.t1-m.t0,inA=sm(-.4,.25,u),out=1-sm(len,len+.9,u),a=inA*out;if(a<=0)return 0;
-  tx.save();tx.translate(m.x??800,m.y??400);tx.scale(m.sc??1,m.sc??1);tx.translate(-800,-400);
-  tx.textAlign='center';tx.textBaseline='middle';const f=fsz(m.txt);tx.font=`600 ${f}px ${FONT}`;tx.letterSpacing='4px';
+  tx.save();if(!PORT){tx.translate(m.x??800,m.y??400);tx.scale(m.sc??1,m.sc??1);tx.translate(-800,-400);}   // portrait: always centred, full size
+  tx.textAlign='center';tx.textBaseline='middle';const f=fsz(m.txt);tx.font=`${WB(600)} ${f}px ${FONT}`;tx.letterSpacing='4px';
   // contrast plate keeps lines legible over any scene
-  tx.globalAlpha=a*.45;const gr=tx.createRadialGradient(800,400,50,800,400,760);gr.addColorStop(0,'#000');gr.addColorStop(1,'#0000');tx.fillStyle=gr;tx.fillRect(0,0,1600,800);
+  tx.globalAlpha=a*(PORT?.8:SMALL?.65:.45);const gr=tx.createRadialGradient(800,400,50,800,400,PORT?900:760);gr.addColorStop(0,'#000');gr.addColorStop(1,'#0000');tx.fillStyle=gr;tx.fillRect(0,0,1600,800);
   if(m.motif)drawMotif(m.motif,a,u,len);
   const st=m.style;
   if(st==='swarm'){const P=glyphPts(m.txt),r=mulberry(7);const form=sm(0,1.6*bl*2,u),ex=Math.max(0,u-len)/.9;   // assemble, hold, explode on the next downbeat
@@ -803,7 +823,7 @@ function drawMessage(t,bl){const m=MSGS.find(x=>t>=x.t0-.4&&t<x.t1+.9);if(!m)ret
       tx.globalAlpha=a*(.5+.5*k);tx.fillRect(x-1.3,y-1.3,2.6,2.6);}
     tx.shadowBlur=0;tx.letterSpacing='0px';tx.globalAlpha=a*sm(.8,1,form)*(1-ex)*.4;tx.fillStyle='#fff';for(const [l,y] of msgLines(m.txt,f))tx.fillText(l,800,y);}
   else if(st==='decode'||st==='flash'){const k=st==='flash'?1:sm(0,2.5*bl*2,u),seed=Math.floor(t*20);const txt=scramble(m.txt,k,seed);
-    const ff=st==='flash'?150:f;tx.font=`${st==='flash'?800:500} ${ff}px ${st==='flash'?FONT:'monospace'}`;tx.letterSpacing=(st==='flash'?30:6)+'px';
+    const ff=st==='flash'?(PORT?Math.min(150,1150/(m.txt.length*.95+.5)):150):f;tx.font=`${st==='flash'?800:WB(500)} ${ff}px ${st==='flash'?FONT:'monospace'}`;tx.letterSpacing=(st==='flash'?30:6)+'px';
     for(const [l,y] of msgLines(txt,ff))glowText(l,800,y,tx.font,st==='flash'?30:6,a*(st==='flash'?.85:1),st==='flash'?40:22,'#ffffff');
     if(st==='flash')tx.globalAlpha=a;}
   else if(st==='chroma'){const sp=8+30*Math.max(0,1-u/(bl*2))+6*Math.sin(t*9);tx.globalCompositeOperation='lighter';
@@ -811,7 +831,7 @@ function drawMessage(t,bl){const m=MSGS.find(x=>t>=x.t0-.4&&t<x.t1+.9);if(!m)ret
     tx.globalCompositeOperation='source-over';}
   else if(st==='scene'){tx.save();const z=1+u*.05;tx.transform(z,0,-.18,z*.82,800-800*z+60,400-400*z*.82+40);   // text laid into the scene's floor plane, drifting with camera
     for(const [l,y] of msgLines(m.txt,f))glowText(l,800,y,tx.font,10,a*.95,30,'#e8fbff','rgba(255,190,110,.9)');tx.restore();}
-  else{for(const [l,y] of msgLines(m.txt,f))glowText(l,800,y,`300 ${f}px ${FONT}`,12+u*2,a,40,'#ffffff');}   // glow
+  else{for(const [l,y] of msgLines(m.txt,f))glowText(l,800,y,`${WB(300)} ${f}px ${FONT}`,PORT||SMALL?6:12+u*2,a,40,'#ffffff');}   // glow
   tx.restore();tx.globalAlpha=1;tx.letterSpacing='0px';return a;}
 // ============================ SIGILS (thin line-art, gold/white/cyan, mostly faint) ============================
 const SIGILS=['pentagram','eye','hexagram','metatron','flower','yantra','ouroboros','ring'];
@@ -924,9 +944,14 @@ document.getElementById('q').onchange=()=>{if(!TEST_T&&!MANUAL)loading=loading.t
 let loading=loadAll().then(async()=>{stEl.textContent=TEST_T!==null||MANUAL?'test mode':(synth?'no audio file — synth fallback':'ready: '+AUDIO_FILE+' · '+map.bpm+' BPM');
   if(TEST_T!==null||MANUAL){go.remove();setup();window.__ready=true;if(!MANUAL)requestAnimationFrame(frame);return;}
   buildShots();await prepGPU();});
-document.getElementById('start').onclick=async()=>{if(!map)return;
+function unlockAudio(){try{if(!ac)return;ac.resume();const b=ac.createBuffer(1,1,22050),s=ac.createBufferSource();s.buffer=b;s.connect(ac.destination);s.start(0);}catch(e){}}
+function goFull(){const d=document.documentElement,f=d.requestFullscreen||d.webkitRequestFullscreen;
+  if(f)try{const p=f.call(d);p&&p.catch&&p.catch(()=>document.body.classList.add('pfs'));}catch(e){document.body.classList.add('pfs');}
+  else{document.body.classList.add('pfs');scrollTo(0,1);}}   // iPhone: no Fullscreen API -> fixed full-viewport canvas
+let lastTap=0;cv.addEventListener('touchend',e=>{const n=performance.now();if(n-lastTap<350){fpsEl.style.display=fpsEl.style.display==='block'?'none':'block';lastTap=0;}else lastTap=n;},{passive:true});
+document.getElementById('start').onclick=async()=>{if(!map)return;unlockAudio();
   QUALITY=document.getElementById('q').value;SAFE_MODE=document.getElementById('safe').checked;
-  document.documentElement.requestFullscreen?.().catch(()=>{});newRunSeed();buildShots();await loading;await prepGPU();lastShot=null;aeFirst=true;await ac.resume();
+  goFull();newRunSeed();buildShots();await loading;await prepGPU();lastShot=null;aeFirst=true;await ac.resume();
   an=ac.createAnalyser();an.fftSize=1024;an.smoothingTimeConstant=.55;an.connect(ac.destination);fft=new Uint8Array(an.frequencyBinCount);
   if(synth)startSynth();else{const s=ac.createBufferSource();s.buffer=buf;s.connect(an);t0=ac.currentTime+.05;s.start(t0);}
   go.remove();requestAnimationFrame(frame);};
@@ -1113,8 +1138,8 @@ function renderAt(t,now){
       setU(P.part,u2);gl.uniform1f(P.part.u('PSCALE'),1.4*(80000/Qp.particles)*(1+.5*build)*(sh.burst?2.2:1));gl.drawArrays(gl.POINTS,0,Qp.particles);gl.disable(gl.BLEND);}
     gl.disable(gl.SCISSOR_TEST);};
   // 1) scene — exactly one heavy raymarch per frame: grids split the same pixel budget into n×n panels
-  if(sh.grid){const n=sh.grid,pw=Math.floor(W/n),ph=Math.floor(H/n);
-    sh.panels.forEach((c,k)=>{const x=(k%n)*pw,y=Math.floor(k/n)*ph;const u2=shotU(c,u);u2.R=[pw,ph];u2.OFS=[x,y];render(T_a,u2,x,y,pw-1,ph-1);});}
+  if(sh.grid){const n=PORT?(sh.grid===2?1:2):sh.grid,nr=PORT?(sh.grid===2?2:3):sh.grid,pw=Math.floor(W/n),ph=Math.floor(H/nr);
+    sh.panels.slice(0,n*nr).forEach((c,k)=>{const x=(k%n)*pw,y=Math.floor(k/n)*ph;const u2=shotU(c,u);u2.R=[pw,ph];u2.OFS=[x,y];render(T_a,u2,x,y,pw-1,ph-1);});}
   else render(T_a,shotU(sh,u));
   // 2) depth of field (close-ups get a shallow focus, grids none)
   draw(P.dof,T_d,W,H,{S:T_a},{RES:[W,H],AP:sh.grid?0:sh.ap*(1+.6*brk),MAXR:7*H/360});
@@ -1142,7 +1167,7 @@ function renderAt(t,now){
   if(HDR){draw(P.lum,T_lum,32,18,{S:T_trail[cur]},{RES:[32,18]});const pa=T_ae[aeI];aeI^=1;
     draw(P.adapt,T_ae[aeI],1,1,{S:T_lum,P:pa},{K:aeFirst?1:1-Math.exp(-dt*2.5)});aeFirst=false;}
   draw(P.final,null,cv.width,cv.height,{S:T_trail[cur],B:T_bloom[0],X:T_txt,AE:T_ae[aeI]},{GRD:sh.grade,AEON:HDR?1:0,RES:[cv.width,cv.height],EXPO:EXPOSURE*(1+pulse)*(1-.15*brk)*(1+.12*build),FADE:fade,GR:GRAIN,
-    CA:CHROMA*Math.min(3,1+1.2*kick+1.2*snare*(1-brk)+build+1.5*drop),BK:BLOOM_STRENGTH*(1+.5*build+.5*drop),TM:t%100,SAT:1.25-.3*brk+.1*drop,XA:xa});
+    CA:CHROMA*Math.min(3,1+1.2*kick+1.2*snare*(1-brk)+build+1.5*drop),BK:BLOOM_STRENGTH*(1+.5*build+.5*drop),TM:t%100,SAT:1.25-.3*brk+.1*drop,XA:xa,TXK});
   const dk=r=>Math.exp(-dt*r);kick*=dk(9);flash*=dk(7.5);snare*=dk(14);hat*=dk(20);snap*=dk(7);
   fpsN++;if(now-fpsT>500){fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now;
     fpsEl.textContent=`${fps.toFixed(1)} fps  ${W}x${H} ${QUALITY}${SAFE_MODE?' SAFE':''}\nshot ${SHOTS.indexOf(sh)}/${SHOTS.length} ${SCN[sh.sc]} ${sh.cut}${sh.grid?' grid'+sh.grid:''}${sh.stut?' stutter':''}  t=${t.toFixed(1)}s  ${map.bpm} BPM  seed ${RUN_SEED} (?seed=${RUN_SEED})\nint ${sI.toFixed(2)} build ${build.toFixed(2)} break ${brk.toFixed(2)}`;}}
